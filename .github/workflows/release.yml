@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish macOS release
+    runs-on: macos-14
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build app bundle
+        run: zsh build-app.sh
+
+      - name: Verify app bundle
+        run: |
+          test -d dist/DisplayHarbor.app
+          test -f dist/DisplayHarbor.app/Contents/Resources/en.lproj/Localizable.strings
+          test -f dist/DisplayHarbor.app/Contents/Resources/zh-Hans.lproj/Localizable.strings
+          codesign --verify --deep --strict dist/DisplayHarbor.app
+
+      - name: Package arm64 app
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          archive="dist/DisplayHarbor-${RELEASE_TAG}-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/DisplayHarbor.app "$archive"
+          shasum -a 256 "$archive" > "${archive}.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DisplayHarbor ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip.sha256
