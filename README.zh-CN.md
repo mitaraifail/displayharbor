@@ -27,6 +27,41 @@ DisplayHarbor 是一个原生 macOS 菜单栏工具，用来记住每个 App 窗
 
 `系统设置 → 隐私与安全性 → 辅助功能`
 
+## 从 GitHub Release 安装（推荐）
+
+普通用户应从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载最新的 arm64 版本。除非你是在开发 DisplayHarbor，否则不需要运行 `swift run` 或 `build-app.sh`。
+
+1. 下载 `.zip` 文件。`.sha256` 只是校验文件，不是安装程序。
+2. 在终端中校验压缩包：
+
+   ```bash
+   archive="DisplayHarbor-v0.1.1-macos-arm64.zip"
+   shasum -a 256 -c "$archive.sha256"
+   ```
+
+3. 解压并将 App 移动到 `/Applications`：
+
+   ```bash
+   ditto -x -k "$archive" .
+   mv DisplayHarbor.app /Applications/
+   ```
+
+4. 当前 Release 尚未公证。首次打开时，在 Finder 中按住 Control 点按 `DisplayHarbor.app`，选择“打开”并确认。如果没有“打开”选项，前往“系统设置 → 隐私与安全性”，在 DisplayHarbor 的提示旁点击“仍要打开”，再重试。
+5. 如果校验通过后 macOS 仍然拦截，并且你确认下载来源可信，可以只移除这个 App 包的隔离标记：
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/DisplayHarbor.app
+   open /Applications/DisplayHarbor.app
+   ```
+
+如果 Finder 显示通用占位图标，安装后重新启动 Finder。如果 macOS 提示 App 已损坏，请先重新下载 Release 并校验 checksum，再进行其他处理。
+
+## 更新软件
+
+当前版本采用手动更新：从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新压缩包，退出 DisplayHarbor，用新的 `DisplayHarbor.app` 替换 `/Applications/DisplayHarbor.app`，然后重新启动。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。
+
+当前还没有内置更新功能。未来完成 Developer ID 签名和公证后，可以接入 Sparkle 2，通过 appcast 提供带签名、需要用户确认的应用内更新。
+
 ## 从源码运行
 
 ```bash
@@ -70,40 +105,14 @@ open dist/DisplayHarbor.app
 推送 `v*` tag 后，[`.github/workflows/release.yml`](.github/workflows/release.yml) 会自动构建并发布：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 工作流会构建、验证并上传：
 
 - `DisplayHarbor-<version>-macos-arm64.zip`
 - 对应的 `.sha256` 校验文件
-
-## 安装 GitHub Release
-
-1. 从 Release 页面下载 `.zip` 文件。`.sha256` 只是校验文件，不是安装程序。
-2. 在终端中校验下载内容：
-
-   ```bash
-   shasum -a 256 -c DisplayHarbor-v0.1.0-macos-arm64.zip.sha256
-   ```
-
-3. 解压并将 `DisplayHarbor.app` 移动到 `/Applications`：
-
-   ```bash
-   ditto -x -k DisplayHarbor-v0.1.0-macos-arm64.zip .
-   mv DisplayHarbor.app /Applications/
-   ```
-
-4. 当前 Release 尚未公证。首次打开时，在 Finder 中按住 Control 点按 `DisplayHarbor.app`，选择“打开”并确认提示。不要把 `.zip` 或 `.sha256` 文件当作 App 打开。
-5. 如果校验通过后 macOS 仍然拦截，可以只移除这个 App 包的隔离标记，然后启动：
-
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/DisplayHarbor.app
-   open /Applications/DisplayHarbor.app
-   ```
-
-   Release 包已经包含生成好的 DisplayHarbor 图标；如果 Finder 仍显示缓存的占位图标，可以重新启动 Finder。
 
 ## 显示器环境与情景
 
