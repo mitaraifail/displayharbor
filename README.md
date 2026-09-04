@@ -79,6 +79,32 @@ The workflow builds, verifies, and uploads:
 - `DisplayHarbor-<version>-macos-arm64.zip`
 - the matching `.sha256` checksum file
 
+## Install a GitHub Release
+
+1. Download the `.zip` asset from the Release page. The `.sha256` file is only a checksum and is not an installer.
+2. Verify the download from Terminal:
+
+   ```bash
+   shasum -a 256 -c DisplayHarbor-v0.1.0-macos-arm64.zip.sha256
+   ```
+
+3. Extract the archive and move `DisplayHarbor.app` to `/Applications`:
+
+   ```bash
+   ditto -x -k DisplayHarbor-v0.1.0-macos-arm64.zip .
+   mv DisplayHarbor.app /Applications/
+   ```
+
+4. The current release is not notarized. On first launch, Control-click `DisplayHarbor.app` in Finder, choose **Open**, and confirm the prompt. Do not open the `.zip` or `.sha256` file as the app.
+5. If macOS still blocks the app after the checksum passes, remove the quarantine flag from this app bundle only, then launch it:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/DisplayHarbor.app
+   open /Applications/DisplayHarbor.app
+   ```
+
+   The release bundle includes a generated DisplayHarbor icon; Finder may need to be relaunched if it is showing a cached placeholder icon.
+
 ## Display setups and workspaces
 
 DisplayHarbor identifies a display setup from the connected physical displays, their arrangement, resolutions, and main-display relationship. Rules from one setup do not overwrite rules from another setup.

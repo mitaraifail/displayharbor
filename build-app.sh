@@ -22,11 +22,14 @@ fi
 
 swift build -c release
 
+swift "$project_dir/Scripts/generate-app-icon.swift" "$project_dir/Resources/AppIcon.icns"
+
 rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS"
 mkdir -p "$app_dir/Contents/Resources"
 cp "$project_dir/.build/arm64-apple-macosx/release/DisplayHarbor" "$app_dir/Contents/MacOS/DisplayHarbor"
 cp "$project_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
+cp "$project_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
 cp -R "$project_dir/Resources/"*.lproj "$app_dir/Contents/Resources/"
 
 signing_identity="${DISPLAYHARBOR_SIGNING_IDENTITY:-DisplayHarbor Development}"

@@ -23,6 +23,7 @@ jobs:
       - name: Verify app bundle
         run: |
           test -d dist/DisplayHarbor.app
+          test -f dist/DisplayHarbor.app/Contents/Resources/AppIcon.icns
           test -f dist/DisplayHarbor.app/Contents/Resources/en.lproj/Localizable.strings
           test -f dist/DisplayHarbor.app/Contents/Resources/zh-Hans.lproj/Localizable.strings
           codesign --verify --deep --strict dist/DisplayHarbor.app

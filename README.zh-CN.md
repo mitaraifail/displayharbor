@@ -79,6 +79,32 @@ git push origin v0.1.0
 - `DisplayHarbor-<version>-macos-arm64.zip`
 - 对应的 `.sha256` 校验文件
 
+## 安装 GitHub Release
+
+1. 从 Release 页面下载 `.zip` 文件。`.sha256` 只是校验文件，不是安装程序。
+2. 在终端中校验下载内容：
+
+   ```bash
+   shasum -a 256 -c DisplayHarbor-v0.1.0-macos-arm64.zip.sha256
+   ```
+
+3. 解压并将 `DisplayHarbor.app` 移动到 `/Applications`：
+
+   ```bash
+   ditto -x -k DisplayHarbor-v0.1.0-macos-arm64.zip .
+   mv DisplayHarbor.app /Applications/
+   ```
+
+4. 当前 Release 尚未公证。首次打开时，在 Finder 中按住 Control 点按 `DisplayHarbor.app`，选择“打开”并确认提示。不要把 `.zip` 或 `.sha256` 文件当作 App 打开。
+5. 如果校验通过后 macOS 仍然拦截，可以只移除这个 App 包的隔离标记，然后启动：
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/DisplayHarbor.app
+   open /Applications/DisplayHarbor.app
+   ```
+
+   Release 包已经包含生成好的 DisplayHarbor 图标；如果 Finder 仍显示缓存的占位图标，可以重新启动 Finder。
+
 ## 显示器环境与情景
 
 DisplayHarbor 根据已连接的物理显示器、排列位置、分辨率和主屏关系识别显示器环境。不同环境的规则互不覆盖。
