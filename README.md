@@ -27,40 +27,40 @@ On first launch, allow DisplayHarbor to control your windows in:
 
 `System Settings → Privacy & Security → Accessibility`
 
+If permission is missing when you open the menu bar panel, DisplayHarbor opens this settings page once for guidance and keeps an **Open Accessibility Settings** button available as a fallback.
+
 ## Install from GitHub Release (recommended)
 
-For normal use, download the latest arm64 build from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest). Do not use `swift run` or `build-app.sh` unless you are developing DisplayHarbor.
+For normal use, download the latest arm64 **DMG** from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest). The ZIP is kept as a fallback for scripted or manual installs. Do not use `swift run` or `build-app.sh` unless you are developing DisplayHarbor.
 
-1. Download the `.zip` asset. The `.sha256` file is only a checksum, not an installer.
-2. Verify the archive from Terminal:
+1. Download the `.dmg` asset and its matching `.sha256` file. The checksum file is not an installer.
+2. Verify the DMG from Terminal:
+
+   ```bash
+   archive="DisplayHarbor-v0.1.1-macos-arm64.dmg"
+   shasum -a 256 -c "$archive.sha256"
+   ```
+
+3. Open the DMG and drag `DisplayHarbor.app` to the `Applications` shortcut.
+4. This release is not notarized. The first time, Control-click `DisplayHarbor.app` in Finder, choose **Open**, and confirm. If **Open** is not offered, go to **System Settings → Privacy & Security** and click **Open Anyway** for DisplayHarbor, then try again.
+5. The mounted DMG also contains `README.txt` and an optional **Open DisplayHarbor (Advanced).command** launcher. After verifying the checksum and copying the app to `/Applications`, advanced users can double-click that launcher. It removes the quarantine marker from the exact `/Applications/DisplayHarbor.app` path and starts it; it does not grant Accessibility permission and does not use `sudo`. The normal Finder flow is preferred.
+
+ZIP fallback:
 
    ```bash
    archive="DisplayHarbor-v0.1.1-macos-arm64.zip"
    shasum -a 256 -c "$archive.sha256"
-   ```
-
-3. Extract it and move the app to `/Applications`:
-
-   ```bash
    ditto -x -k "$archive" .
    mv DisplayHarbor.app /Applications/
-   ```
-
-4. This release is not notarized. The first time, Control-click `DisplayHarbor.app` in Finder, choose **Open**, and confirm. If **Open** is not offered, go to **System Settings → Privacy & Security** and click **Open Anyway** for DisplayHarbor, then try again.
-5. If macOS still blocks the app after the checksum passes, and you trust the download source, remove the quarantine flag from this app bundle only:
-
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/DisplayHarbor.app
-   open /Applications/DisplayHarbor.app
    ```
 
 If Finder shows a generic placeholder icon, relaunch Finder after installation. If macOS reports that the app is damaged, download the Release again and verify its checksum before trying anything else.
 
 ## Updating
 
-The current release uses manual updates: download the newer archive from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), quit DisplayHarbor, replace `/Applications/DisplayHarbor.app`, and launch it again. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced.
+DisplayHarbor checks the GitHub Releases API periodically. When a newer version is available, the menu bar panel shows a **New version** action that opens the matching release page. This free, non-notarized release intentionally does not replace the app automatically.
 
-An in-app update flow is not included yet. When Developer ID signing and notarization are enabled, Sparkle 2 can provide signed, user-confirmed updates through an appcast feed.
+To update, download the newer archive from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), quit DisplayHarbor, replace `/Applications/DisplayHarbor.app`, and launch it again. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced. After Developer ID signing and notarization are available, a signed Sparkle 2 updater can be considered for a smoother in-app flow.
 
 ## Run from source
 
@@ -112,7 +112,9 @@ git push origin v0.1.1
 The workflow builds, verifies, and uploads:
 
 - `DisplayHarbor-<version>-macos-arm64.zip`
-- the matching `.sha256` checksum file
+- `DisplayHarbor-<version>-macos-arm64.zip.sha256`
+- `DisplayHarbor-<version>-macos-arm64.dmg` (recommended installer)
+- `DisplayHarbor-<version>-macos-arm64.dmg.sha256`
 
 ## Display setups and workspaces
 

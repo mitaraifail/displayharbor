@@ -1271,6 +1271,114 @@ final class AnimatedButton: NSButton {
     }
 }
 
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let htmlURL: URL
+    let draft: Bool
+    let prerelease: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+        case draft
+        case prerelease
+    }
+}
+
+@MainActor
+final class UpdateChecker {
+    enum Status {
+        case idle
+        case checking
+        case current
+        case available(version: String, url: URL)
+        case failed
+    }
+
+    static let shared = UpdateChecker()
+    static let stateDidChange = Notification.Name("DisplayHarborUpdateStateDidChange")
+
+    private(set) var status: Status = .idle {
+        didSet {
+            NotificationCenter.default.post(name: Self.stateDidChange, object: nil)
+        }
+    }
+
+    private let endpoint = URL(string: "https://api.github.com/repos/mitaraifail/displayharbor/releases/latest")!
+    private let lastCheckKey = "DisplayHarbor.lastUpdateCheck"
+    private let checkInterval: TimeInterval = 6 * 60 * 60
+    private var task: Task<Void, Never>?
+
+    var currentVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
+    }
+
+    func checkIfNeeded() {
+        guard task == nil else { return }
+        let lastCheck = UserDefaults.standard.object(forKey: lastCheckKey) as? Date
+        guard lastCheck.map({ Date().timeIntervalSince($0) >= checkInterval }) ?? true else { return }
+        check(force: false)
+    }
+
+    func check(force: Bool) {
+        guard task == nil else { return }
+        if !force {
+            let lastCheck = UserDefaults.standard.object(forKey: lastCheckKey) as? Date
+            guard lastCheck.map({ Date().timeIntervalSince($0) >= checkInterval }) ?? true else { return }
+        }
+
+        status = .checking
+        UserDefaults.standard.set(Date(), forKey: lastCheckKey)
+        task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                var request = URLRequest(url: endpoint)
+                request.setValue("DisplayHarbor/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200..<300).contains(httpResponse.statusCode) else {
+                    throw URLError(.badServerResponse)
+                }
+                let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+                guard !release.draft, !release.prerelease,
+                      let latestVersion = Self.version(from: release.tagName) else {
+                    throw URLError(.cannotParseResponse)
+                }
+                status = Self.isNewer(latestVersion, than: currentVersion)
+                    ? .available(version: latestVersion, url: release.htmlURL)
+                    : .current
+            } catch {
+                status = .failed
+            }
+            task = nil
+        }
+    }
+
+    private static func version(from tag: String) -> String? {
+        let value = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "^v", with: "", options: .regularExpression)
+            .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init) ?? ""
+        let components = value.split(separator: ".")
+        guard !components.isEmpty, components.allSatisfy({ Int($0) != nil }) else { return nil }
+        return value
+    }
+
+    private static func isNewer(_ candidate: String, than current: String) -> Bool {
+        let candidateParts = candidate.split(separator: ".").map { Int($0) ?? 0 }
+        let currentParts = current.split(separator: ".").map { Int($0) ?? 0 }
+        let count = max(candidateParts.count, currentParts.count)
+        for index in 0..<count {
+            let candidatePart = index < candidateParts.count ? candidateParts[index] : 0
+            let currentPart = index < currentParts.count ? currentParts[index] : 0
+            if candidatePart != currentPart { return candidatePart > currentPart }
+        }
+        return false
+    }
+}
+
 @MainActor
 final class PopoverViewController: NSViewController {
     private var snapshot: WindowSnapshot?
@@ -1309,6 +1417,18 @@ final class PopoverViewController: NSViewController {
         self.onOpenManager = onOpenManager
         self.onClosePopover = onClosePopover
         super.init(nibName: nil, bundle: nil)
+    }
+
+    func update(snapshot: WindowSnapshot?, snapshots: [WindowSnapshot]) {
+        self.snapshot = snapshot
+        self.snapshots = snapshots
+        guard isViewLoaded else { return }
+        render()
+    }
+
+    func refreshUpdateState() {
+        guard isViewLoaded else { return }
+        render()
     }
 
     var popoverSize: NSSize {
@@ -1554,6 +1674,7 @@ final class PopoverViewController: NSViewController {
             addAppAction(permissionButton, fillsWidth: true)
             addManageAction()
             addScenarioActions()
+            addUpdateAction()
             addQuitAction()
             return
         }
@@ -1604,6 +1725,7 @@ final class PopoverViewController: NSViewController {
             addQuickEnvironmentAction(for: unopenedAppNames)
         }
         addScenarioActions()
+        addUpdateAction()
         addQuitAction()
     }
 
@@ -1660,6 +1782,32 @@ final class PopoverViewController: NSViewController {
         makeTextButton(switchButton)
         footerStack.addArrangedSubview(footerSpacer())
         footerStack.addArrangedSubview(switchButton)
+    }
+
+    private func addUpdateAction() {
+        let update = button(updateTitle(), action: #selector(checkForUpdates))
+        update.bezelStyle = .inline
+        update.contentTintColor = .secondaryLabelColor
+        update.font = .systemFont(ofSize: 11)
+        update.isEnabled = !isCheckingForUpdates()
+        makeTextButton(update)
+        footerStack.addArrangedSubview(footerSpacer())
+        footerStack.addArrangedSubview(update)
+    }
+
+    private func updateTitle() -> String {
+        switch UpdateChecker.shared.status {
+        case .available(let version, _): return L10n.text("New version %@", version)
+        case .checking: return L10n.text("Checking for updates")
+        case .current: return L10n.text("Up to date")
+        case .failed: return L10n.text("Check for updates")
+        case .idle: return L10n.text("Check for updates")
+        }
+    }
+
+    private func isCheckingForUpdates() -> Bool {
+        if case .checking = UpdateChecker.shared.status { return true }
+        return false
     }
 
     private func footerSpacer() -> NSView {
@@ -1883,6 +2031,17 @@ final class PopoverViewController: NSViewController {
     @objc private func openAccessibility() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func checkForUpdates() {
+        switch UpdateChecker.shared.status {
+        case .available(_, let url):
+            NSWorkspace.shared.open(url)
+        case .checking:
+            break
+        case .idle, .current, .failed:
+            UpdateChecker.shared.check(force: true)
+        }
     }
 
     @objc private func quitApp() {
@@ -2785,13 +2944,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastExternalApplication: NSRunningApplication?
     private var environmentChangeWorkItem: DispatchWorkItem?
     private var statusResetWorkItem: DispatchWorkItem?
+    private var accessibilityRefreshTimer: Timer?
+    private var updateCheckTimer: Timer?
+    private var didPromptForAccessibilityThisLaunch = false
+    private var popoverApplication: NSRunningApplication?
     private var restoreGeneration = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         NSApp.applicationIconImage = displayHarborIcon()
+        UpdateChecker.shared.checkIfNeeded()
+        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { _ in
+            Task { @MainActor in
+                UpdateChecker.shared.checkIfNeeded()
+            }
+        }
         store = RuleStore(currentEnvironment: DisplayInfo.currentEnvironment())
         observeApplications()
+        NotificationCenter.default.addObserver(
+            forName: UpdateChecker.stateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let controller = self.popover.contentViewController as? PopoverViewController else { return }
+                controller.refreshUpdateState()
+            }
+        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.target = self
@@ -2806,13 +2986,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePopover(_ sender: Any?) {
         if popover.isShown {
+            stopAccessibilityRefresh()
             popover.performClose(sender)
             return
         }
 
-        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
-            ? lastExternalApplication
-            : NSWorkspace.shared.frontmostApplication
+        let app = externalApplication()
+        popoverApplication = app
         let snapshots = app.map { WindowProbe.snapshots(for: $0) } ?? []
         let snapshot = app.flatMap { WindowProbe.snapshot(for: $0) } ?? snapshots.first
         let controller = PopoverViewController(
@@ -2834,6 +3014,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: statusItem.button?.bounds ?? .zero, of: statusItem.button ?? NSView(), preferredEdge: .minY)
         focusPopover()
+
+        guard !AXIsProcessTrusted() else { return }
+        startAccessibilityRefresh()
+        guard !didPromptForAccessibilityThisLaunch else { return }
+        didPromptForAccessibilityThisLaunch = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.popover.isShown, !AXIsProcessTrusted() else { return }
+            self.openAccessibilitySettings()
+        }
+    }
+
+    private func externalApplication() -> NSRunningApplication? {
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        return frontmost?.bundleIdentifier == Bundle.main.bundleIdentifier ? lastExternalApplication : frontmost
+    }
+
+    private func startAccessibilityRefresh() {
+        stopAccessibilityRefresh()
+        accessibilityRefreshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                guard self.popover.isShown else {
+                    self.accessibilityRefreshTimer?.invalidate()
+                    self.accessibilityRefreshTimer = nil
+                    return
+                }
+                guard AXIsProcessTrusted() else { return }
+                self.accessibilityRefreshTimer?.invalidate()
+                self.accessibilityRefreshTimer = nil
+                self.refreshPopoverAfterAccessibilityGranted()
+            }
+        }
+    }
+
+    private func stopAccessibilityRefresh() {
+        accessibilityRefreshTimer?.invalidate()
+        accessibilityRefreshTimer = nil
+    }
+
+    private func refreshPopoverAfterAccessibilityGranted() {
+        guard let controller = popover.contentViewController as? PopoverViewController,
+              let app = popoverApplication ?? externalApplication() else { return }
+        let snapshots = WindowProbe.snapshots(for: app)
+        controller.update(snapshot: WindowProbe.snapshot(for: app) ?? snapshots.first, snapshots: snapshots)
+        popover.contentSize = controller.popoverSize
     }
 
     private func focusPopover() {
@@ -2874,8 +3101,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func closePopover() {
         if popover.isShown {
+            stopAccessibilityRefresh()
             popover.performClose(nil)
         }
+    }
+
+    private func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func observeApplications() {

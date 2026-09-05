@@ -18,6 +18,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build app bundle
+        env:
+          DISPLAYHARBOR_VERSION: ${{ github.ref_name }}
         run: zsh build-app.sh
 
       - name: Verify app bundle
@@ -34,7 +36,12 @@ jobs:
         run: |
           archive="dist/DisplayHarbor-${RELEASE_TAG}-macos-arm64.zip"
           ditto -c -k --sequesterRsrc --keepParent dist/DisplayHarbor.app "$archive"
-          shasum -a 256 "$archive" > "${archive}.sha256"
+          (cd "$(dirname "$archive")" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
+
+      - name: Package DMG
+        env:
+          DISPLAYHARBOR_VERSION: ${{ github.ref_name }}
+        run: zsh package-dmg.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -46,3 +53,5 @@ jobs:
           files: |
             dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip
             dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip.sha256
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.dmg
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.dmg.sha256

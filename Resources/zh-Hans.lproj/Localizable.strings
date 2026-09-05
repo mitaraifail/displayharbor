@@ -87,3 +87,7 @@
 "Status" = "状态";
 "Switch" = "切换";
 "The rules file was corrupted and backed up as %@" = "规则文件损坏，已备份为 %@";
+"Check for updates" = "检查更新";
+"Checking for updates" = "正在检查更新…";
+"New version %@" = "新版本 %@";
+"Up to date" = "已是最新版本";
