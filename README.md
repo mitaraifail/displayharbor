@@ -37,18 +37,18 @@ For normal use, download the latest arm64 **DMG** from the [GitHub Releases page
 2. Verify the DMG from Terminal:
 
    ```bash
-   archive="DisplayHarbor-v0.1.3-macos-arm64.dmg"
+   archive="DisplayHarbor-v0.1.4-macos-arm64.dmg"
    shasum -a 256 -c "$archive.sha256"
    ```
 
 3. Open the DMG and drag `DisplayHarbor.app` to the `Applications` shortcut.
 4. This release is not notarized. The first time, Control-click `DisplayHarbor.app` in Finder, choose **Open**, and confirm. If **Open** is not offered, go to **System Settings → Privacy & Security** and click **Open Anyway** for DisplayHarbor, then try again.
-5. The mounted DMG also contains `README.txt` and an optional **Open DisplayHarbor (Advanced).app** launcher. After verifying the checksum and copying the app to `/Applications`, advanced users can double-click that launcher. If macOS blocks the helper the first time, Control-click it in Finder and choose **Open**. It removes the quarantine marker from the exact `/Applications/DisplayHarbor.app` path and starts it; it does not grant Accessibility permission and does not use `sudo`. The normal Finder flow is preferred.
+5. The mounted DMG also contains `README.txt` and an optional **Open DisplayHarbor (Advanced).app** launcher. After verifying the checksum, advanced users can double-click that launcher directly from the mounted DMG; after confirmation, it installs or replaces `DisplayHarbor.app` in `/Applications`, removes the quarantine marker from the exact app path, and starts it. If macOS blocks the helper the first time, Control-click it in Finder and choose **Open**. It does not grant Accessibility permission and does not use `sudo`. The normal Finder flow is preferred.
 
 ZIP fallback:
 
    ```bash
-   archive="DisplayHarbor-v0.1.3-macos-arm64.zip"
+   archive="DisplayHarbor-v0.1.4-macos-arm64.zip"
    shasum -a 256 -c "$archive.sha256"
    ditto -x -k "$archive" .
    mv DisplayHarbor.app /Applications/
@@ -60,7 +60,7 @@ If Finder shows a generic placeholder icon, relaunch Finder after installation. 
 
 DisplayHarbor checks the GitHub Releases API periodically. When a newer version is available, the menu bar panel shows a **New version** action that opens the matching release page. This free, non-notarized release intentionally does not replace the app automatically.
 
-To update, download the newer archive from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), quit DisplayHarbor, replace `/Applications/DisplayHarbor.app`, and launch it again. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced. After Developer ID signing and notarization are available, a signed Sparkle 2 updater can be considered for a smoother in-app flow.
+To update, download the newer DMG from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), verify its checksum, quit DisplayHarbor, and either drag the new app to `/Applications` or use the advanced launcher in the mounted DMG to replace and launch it. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced. After Developer ID signing and notarization are available, a signed Sparkle 2 updater can be considered for a smoother in-app flow.
 
 ## Run from source
 
@@ -105,8 +105,8 @@ User-defined display setup names, workspace names, and app rule data are preserv
 Releases are built automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) whenever a `v*` tag is pushed:
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 The workflow builds, verifies, and uploads:

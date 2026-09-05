@@ -37,18 +37,18 @@ DisplayHarbor 是一个原生 macOS 菜单栏工具，用来记住每个 App 窗
 2. 在终端中校验 DMG：
 
    ```bash
-   archive="DisplayHarbor-v0.1.3-macos-arm64.dmg"
+   archive="DisplayHarbor-v0.1.4-macos-arm64.dmg"
    shasum -a 256 -c "$archive.sha256"
    ```
 
 3. 打开 DMG，将 `DisplayHarbor.app` 拖到“应用程序”快捷方式。
 4. 当前 Release 尚未公证。首次打开时，在 Finder 中按住 Control 点按 `DisplayHarbor.app`，选择“打开”并确认。如果没有“打开”选项，前往“系统设置 → 隐私与安全性”，在 DisplayHarbor 的提示旁点击“仍要打开”，再重试。
-5. 挂载后的 DMG 里还包含 `README.txt` 和可选的 **Open DisplayHarbor (Advanced).app** 启动器。校验 checksum 并将 App 复制到 `/Applications` 后，高级用户可以双击这个启动器。如果 macOS 第一次拦截这个辅助 App，请在 Finder 中按住 Control 点按它并选择“打开”。它只会移除精确的 `/Applications/DisplayHarbor.app` 隔离标记并启动 App；不会授予辅助功能权限，也不会使用 `sudo`。普通用户优先使用 Finder 的标准流程。
+5. 挂载后的 DMG 里还包含 `README.txt` 和可选的 **Open DisplayHarbor (Advanced).app** 启动器。校验 checksum 后，高级用户可以直接在已挂载的 DMG 中双击这个启动器；确认后，它会将 `DisplayHarbor.app` 安装或替换到 `/Applications`，移除精确 App 路径的隔离标记并启动。如果 macOS 第一次拦截这个辅助 App，请在 Finder 中按住 Control 点按它并选择“打开”。它不会授予辅助功能权限，也不会使用 `sudo`。普通用户优先使用 Finder 的标准流程。
 
 ZIP 备用方式：
 
    ```bash
-   archive="DisplayHarbor-v0.1.3-macos-arm64.zip"
+   archive="DisplayHarbor-v0.1.4-macos-arm64.zip"
    shasum -a 256 -c "$archive.sha256"
    ditto -x -k "$archive" .
    mv DisplayHarbor.app /Applications/
@@ -60,7 +60,7 @@ ZIP 备用方式：
 
 DisplayHarbor 会定期检查 GitHub Releases。当发现新版本时，菜单栏面板会显示“新版本”操作，点击后打开对应的 Release 页面。当前免费、未公证的版本不会自动替换 App。
 
-更新时，从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新的压缩包，退出 DisplayHarbor，用新的 `DisplayHarbor.app` 替换 `/Applications/DisplayHarbor.app`，然后重新启动。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。未来完成 Developer ID 签名和公证后，可以考虑接入带签名的 Sparkle 2，提供更顺滑的应用内更新流程。
+更新时，从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新的 DMG 并校验 checksum，退出 DisplayHarbor，然后将新的 App 拖到 `/Applications`，或者直接使用已挂载 DMG 中的高级启动器完成替换和启动。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。未来完成 Developer ID 签名和公证后，可以考虑接入带签名的 Sparkle 2，提供更顺滑的应用内更新流程。
 
 ## 从源码运行
 
@@ -105,8 +105,8 @@ open dist/DisplayHarbor.app
 推送 `v*` tag 后，[`.github/workflows/release.yml`](.github/workflows/release.yml) 会自动构建并发布：
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 工作流会构建、验证并上传：

@@ -2,6 +2,10 @@
 set -euo pipefail
 
 app_path="/Applications/DisplayHarbor.app"
+executable_dir="${0:A:h}"
+contents_dir="${executable_dir:h}"
+launcher_dir="${contents_dir:h}"
+source_app="${launcher_dir:h}/DisplayHarbor.app"
 
 show_error() {
     /usr/bin/osascript - "$1" <<'APPLESCRIPT'
@@ -11,22 +15,58 @@ end run
 APPLESCRIPT
 }
 
-if [[ ! -d "$app_path" ]]; then
-    show_error "DisplayHarbor.app was not found in /Applications.\n\n请先将 DisplayHarbor.app 拖到“应用程序”文件夹。"
+if [[ ! -d "$source_app" ]]; then
+    show_error "DisplayHarbor.app was not found next to this launcher.\n\n请从已挂载的 DisplayHarbor DMG 中运行这个辅助 App。"
     exit 1
 fi
 
+if /usr/bin/pgrep -x DisplayHarbor >/dev/null 2>&1; then
+    show_error "Please quit DisplayHarbor before installing or updating it.\n\n请先退出正在运行的 DisplayHarbor，再进行安装或更新。"
+    exit 1
+fi
+
+temporary_dir="$(/usr/bin/mktemp -d /tmp/displayharbor-install.XXXXXX)"
+temporary_app="$temporary_dir/DisplayHarbor.app"
+backup_app="/tmp/DisplayHarbor.app.previous.$$"
+
 if ! /usr/bin/osascript <<'APPLESCRIPT'
-set messageText to "This advanced launcher removes the macOS quarantine marker from /Applications/DisplayHarbor.app, then opens it." & return & return & "此高级启动器会移除 /Applications/DisplayHarbor.app 的 macOS 隔离标记，然后启动 App。" & return & return & "Only continue after verifying the matching GitHub Release checksum." & return & "只有在确认 GitHub Release checksum 正确后才继续。"
+set messageText to "This advanced launcher installs or replaces DisplayHarbor.app in /Applications, removes its macOS quarantine marker, then opens it." & return & return & "此高级启动器会将 DisplayHarbor.app 安装或替换到“应用程序”，移除其 macOS 隔离标记，然后启动 App。" & return & return & "Only continue after verifying the matching GitHub Release checksum." & return & "只有在确认 GitHub Release checksum 正确后才继续。"
 display dialog messageText with title "DisplayHarbor" buttons {"Cancel / 取消", "Continue / 继续"} default button "Continue / 继续" cancel button "Cancel / 取消"
 APPLESCRIPT
 then
     exit 0
 fi
 
-if ! /usr/bin/xattr -dr com.apple.quarantine "$app_path"; then
-    show_error "Could not remove the quarantine marker from /Applications/DisplayHarbor.app.\n\n无法移除 /Applications/DisplayHarbor.app 的隔离标记。"
+if ! /usr/bin/ditto "$source_app" "$temporary_app"; then
+    show_error "Could not copy DisplayHarbor.app from the mounted DMG.\n\n无法从已挂载的 DMG 复制 DisplayHarbor.app。"
+    /bin/rm -rf "$temporary_dir"
     exit 1
 fi
 
+/usr/bin/xattr -dr com.apple.quarantine "$temporary_app" 2>/dev/null || true
+remaining_quarantine="$(/usr/bin/xattr -lr "$temporary_app" 2>/dev/null || true)"
+if [[ "$remaining_quarantine" == *com.apple.quarantine* ]]; then
+    show_error "Could not remove the quarantine marker from the new app.\n\n无法移除新 App 的隔离标记。"
+    /bin/rm -rf "$temporary_dir"
+    exit 1
+fi
+
+if [[ -e "$app_path" ]]; then
+    if ! /bin/mv "$app_path" "$backup_app"; then
+        show_error "Could not replace the existing app in /Applications.\n\n无法替换“应用程序”中的现有 App。"
+        /bin/rm -rf "$temporary_dir"
+        exit 1
+    fi
+fi
+
+if ! /bin/mv "$temporary_app" "$app_path"; then
+    if [[ -e "$backup_app" ]]; then
+        /bin/mv "$backup_app" "$app_path"
+    fi
+    show_error "Could not install DisplayHarbor.app in /Applications.\n\n无法将 DisplayHarbor.app 安装到“应用程序”。"
+    /bin/rm -rf "$temporary_dir"
+    exit 1
+fi
+
+/bin/rm -rf "$temporary_dir" "$backup_app"
 /usr/bin/open "$app_path"
