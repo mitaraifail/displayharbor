@@ -1,0 +1,32 @@
+#!/bin/zsh
+set -euo pipefail
+
+app_path="/Applications/DisplayHarbor.app"
+
+show_error() {
+    /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+    display dialog (item 1 of argv) with title "DisplayHarbor" buttons {"OK / 好"} default button "OK / 好"
+end run
+APPLESCRIPT
+}
+
+if [[ ! -d "$app_path" ]]; then
+    show_error "DisplayHarbor.app was not found in /Applications.\n\n请先将 DisplayHarbor.app 拖到“应用程序”文件夹。"
+    exit 1
+fi
+
+if ! /usr/bin/osascript <<'APPLESCRIPT'
+set messageText to "This advanced launcher removes the macOS quarantine marker from /Applications/DisplayHarbor.app, then opens it." & return & return & "此高级启动器会移除 /Applications/DisplayHarbor.app 的 macOS 隔离标记，然后启动 App。" & return & return & "Only continue after verifying the matching GitHub Release checksum." & return & "只有在确认 GitHub Release checksum 正确后才继续。"
+display dialog messageText with title "DisplayHarbor" buttons {"Cancel / 取消", "Continue / 继续"} default button "Continue / 继续" cancel button "Cancel / 取消"
+APPLESCRIPT
+then
+    exit 0
+fi
+
+if ! /usr/bin/xattr -dr com.apple.quarantine "$app_path"; then
+    show_error "Could not remove the quarantine marker from /Applications/DisplayHarbor.app.\n\n无法移除 /Applications/DisplayHarbor.app 的隔离标记。"
+    exit 1
+fi
+
+/usr/bin/open "$app_path"

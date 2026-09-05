@@ -20,8 +20,11 @@ mkdir -p "$staging_dir"
 ditto "$app_dir" "$staging_dir/DisplayHarbor.app"
 ln -s /Applications "$staging_dir/Applications"
 cp "$project_dir/Resources/DMG/README.txt" "$staging_dir/README.txt"
-cp "$project_dir/Resources/DMG/Open DisplayHarbor (Advanced).command" "$staging_dir/Open DisplayHarbor (Advanced).command"
-chmod +x "$staging_dir/Open DisplayHarbor (Advanced).command"
+launcher_app="$staging_dir/Open DisplayHarbor (Advanced).app"
+ditto "$project_dir/Resources/DMG/Open DisplayHarbor (Advanced).app" "$launcher_app"
+mkdir -p "$launcher_app/Contents/Resources"
+cp "$project_dir/Resources/AppIcon.icns" "$launcher_app/Contents/Resources/AppIcon.icns"
+chmod +x "$launcher_app/Contents/MacOS/DisplayHarborAdvancedLauncher"
 
 hdiutil create \
     -volname "DisplayHarbor v${version}" \
