@@ -14,6 +14,8 @@ DisplayHarbor 是一个原生 macOS 菜单栏工具，用来记住每个 App 窗
 - 支持复制、新建、重命名、切换和删除情景。
 - 显示器连接、断开或重新排列后自动重新应用规则。
 - 一键打开当前情景中尚未运行的 App，并恢复窗口。
+- 为每个情景配置进入时需要正常退出的 App。
+- 为受支持的 App 提供专用启动配置，例如浏览器地址、飞书 AppLink 和 Obsidian 文件。
 - 在管理窗口中查看和维护显示器环境及 App 规则。
 - 跟随 macOS 首选语言（内置 English 和简体中文）。
 
@@ -42,8 +44,8 @@ DisplayHarbor 是一个原生 macOS 菜单栏工具，用来记住每个 App 窗
    ```
 
 3. 打开 DMG，将 `DisplayHarbor.app` 拖到“应用程序”快捷方式。
-4. 当前 Release 尚未公证。首次打开时，在 Finder 中按住 Control 点按 `DisplayHarbor.app`，选择“打开”并确认。如果没有“打开”选项，前往“系统设置 → 隐私与安全性”，在 DisplayHarbor 的提示旁点击“仍要打开”，再重试。
-5. 挂载后的 DMG 里还包含 `README.txt` 和可选的 **Open DisplayHarbor (Advanced).app** 启动器。校验 checksum 后，高级用户可以直接在已挂载的 DMG 中双击这个启动器；确认后，它会将 `DisplayHarbor.app` 安装或替换到 `/Applications`，移除精确 App 路径的隔离标记并启动。如果 macOS 第一次拦截这个辅助 App，请在 Finder 中按住 Control 点按它并选择“打开”。它不会授予辅助功能权限，也不会使用 `sudo`。普通用户优先使用 Finder 的标准流程。
+4. GitHub Release 会由 Actions 使用 Developer ID 签名并提交 Apple 公证。正常情况下首次打开不需要绕过“未知开发者”提示；仍需在“系统设置 → 隐私与安全性 → 辅助功能”中授权 DisplayHarbor。
+5. 挂载后的 DMG 里还包含 `README.txt`；安装完成后从“应用程序”启动 DisplayHarbor。
 
 ZIP 备用方式：
 
@@ -58,9 +60,9 @@ ZIP 备用方式：
 
 ## 更新软件
 
-DisplayHarbor 会定期检查 GitHub Releases。当发现新版本时，菜单栏面板会显示“新版本”操作，点击后打开对应的 Release 页面。当前免费、未公证的版本不会自动替换 App。
+DisplayHarbor 会定期检查 GitHub Releases。当发现新版本时，菜单栏面板会显示“新版本”操作，点击后打开对应的 Release 页面。当前免费版本不会自动替换 App。
 
-更新时，从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新的 DMG 并校验 checksum，退出 DisplayHarbor，然后将新的 App 拖到 `/Applications`，或者直接使用已挂载 DMG 中的高级启动器完成替换和启动。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。未来完成 Developer ID 签名和公证后，可以考虑接入带签名的 Sparkle 2，提供更顺滑的应用内更新流程。
+更新时，从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新的 DMG 并校验 checksum，退出 DisplayHarbor，然后将新的 App 拖到 `/Applications`。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。未来可以考虑接入带签名的 Sparkle 2，提供更顺滑的应用内更新流程。
 
 ## 从源码运行
 
@@ -75,15 +77,7 @@ zsh build-app.sh
 open dist/DisplayHarbor.app
 ```
 
-本地开发时，建议先创建一次稳定的开发签名：
-
-```bash
-zsh setup-dev-signing.sh
-zsh build-app.sh
-open dist/DisplayHarbor.app
-```
-
-开发签名只用于本机。GitHub Release 构建使用 ad-hoc 签名，不包含公证。首次打开下载的版本时，如果 macOS 要求确认，请按住 Control 点按 App，然后选择“打开”。
+`build-app.sh` 要求本机已安装 Developer ID Application 证书，并会生成启用 Hardened Runtime 的签名 App。GitHub Release 工作流还会继续提交 Apple 公证；如果签名或公证 Secrets 未配置，工作流会失败，不会发布未签名或未公证的 Release。
 
 ## 使用方式
 
@@ -93,6 +87,19 @@ open dist/DisplayHarbor.app
 4. 为当前 App 保存布局。
 5. 打开“管理环境与 App 规则”查看规则和情景。
 6. 使用“应用当前情景”打开尚未运行的 App，并恢复已保存窗口。
+7. 在情景下方的“进入情景时退出的 App”区域添加需要在切换时退出的工作 App。
+
+### App 专用启动配置
+
+启动内容是按 App 类型提供的专用能力。在“管理环境与 App 规则”中，受支持的 App 规则会显示启动内容图标：
+
+- **Chrome 和兼容浏览器**支持配置 URL（例如 `https://...`）。
+- **飞书**支持配置官方 AppLink（例如 `feishu://...` 或 `https://applink.feishu.cn/...`），可用于打开群聊、文档、日历等支持的目标。
+- **Obsidian** 支持配置本地文件，例如 `/Users/me/Notes/Today.md`。
+
+其他 App 在加入专用集成前不会显示此配置入口。启动内容只会在你明确选择“打开 App”、“打开全部”或“应用当前情景”并启动尚未运行的 App 时执行；普通的显示器变化恢复不会在每次刷新时重复打开。DisplayHarbor 通过 macOS Launch Services 打开内容，不会执行 shell 命令或 AppleScript。
+
+退出规则会在切换到对应情景时向已运行的 App 请求正常退出，不会强制终止进程。如果 App 有未保存内容，macOS 仍会按照 App 自身的保存流程处理。一个 App 不能同时拥有当前情景的窗口布局规则和退出规则。
 
 规则保存在：
 
@@ -116,6 +123,18 @@ git push origin v0.1.4
 - `DisplayHarbor-<version>-macos-arm64.dmg`（推荐安装包）
 - `DisplayHarbor-<version>-macos-arm64.dmg.sha256`
 
+### GitHub Actions 签名与公证配置
+
+Release 工作流需要在仓库的 **Settings → Secrets and variables → Actions** 中配置以下 Secrets：
+
+- `DISPLAYHARBOR_SIGNING_P12_BASE64`：从钥匙串导出的 Developer ID Application `.p12` 文件的 base64 内容。
+- `DISPLAYHARBOR_SIGNING_P12_PASSWORD`：导出 `.p12` 时设置的密码。
+- `DISPLAYHARBOR_NOTARY_APPLE_ID`：加入 Apple Developer Program 的 Apple ID 邮箱。
+- `DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD`：为这个 Apple ID 生成的 App 专用密码，不是 Apple ID 普通密码。
+- `DISPLAYHARBOR_NOTARY_TEAM_ID`：Apple Developer Team ID，例如 `6ABLTPWC78`。
+
+私钥、`.p12` 密码和 API Key 不要提交到 Git。工作流会在 GitHub runner 的临时钥匙串中导入证书，完成签名、公证、票据装订和 checksum 生成。
+
 ## 显示器环境与情景
 
 DisplayHarbor 根据已连接的物理显示器、排列位置、分辨率和主屏关系识别显示器环境。不同环境的规则互不覆盖。
@@ -127,7 +146,7 @@ DisplayHarbor 根据已连接的物理显示器、排列位置、分辨率和主
 - 多窗口匹配使用窗口标题、保存时尺寸和窗口顺序；窗口 ID 改变本身不会阻止恢复。
 - 自动恢复只会移动已经存在的窗口，不会创建缺少的窗口。
 - DisplayHarbor 不会主动切换 macOS Space，也不会创建原生全屏 Space。
-- 当前 Release 仅支持 arm64，并使用未公证的 ad-hoc 签名。
+- 当前 Release 仅支持 arm64。
 
 ## License
 

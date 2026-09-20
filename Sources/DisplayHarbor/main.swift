@@ -2,10 +2,29 @@ import AppKit
 import ApplicationServices
 import Foundation
 import QuartzCore
+import UniformTypeIdentifiers
 
 private enum L10n {
+    private static let bundle: Bundle = {
+        // Packaged App bundles keep their localizations in Bundle.main. The
+        // source-run debug build resolves them from the project Resources folder.
+        if Bundle.main.url(forResource: "en", withExtension: "lproj") != nil
+            || Bundle.main.url(forResource: "zh-Hans", withExtension: "lproj") != nil {
+            return .main
+        }
+        let language = Locale.preferredLanguages.first?.lowercased() ?? ""
+        let localization = language.hasPrefix("zh") ? "zh-Hans" : "en"
+        let sourceResources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("\(localization).lproj", isDirectory: true)
+        return Bundle(url: sourceResources) ?? .main
+    }()
+
     static func text(_ key: String, _ arguments: CVarArg...) -> String {
-        let format = NSLocalizedString(key, tableName: "Localizable", bundle: .main, value: key, comment: "")
+        let format = NSLocalizedString(key, tableName: "Localizable", bundle: bundle, value: key, comment: "")
         guard !arguments.isEmpty else { return format }
         return String(format: format, locale: Locale.current, arguments: arguments)
     }
@@ -60,6 +79,89 @@ struct PlacementRule: Codable {
     }
 }
 
+struct LaunchAction: Codable, Equatable {
+    enum Kind: String, Codable {
+        case url
+        case file
+    }
+
+    let kind: Kind
+    let value: String
+}
+
+private enum LaunchContentKind {
+    case browserURLs
+    case obsidianFiles
+    case feishuLinks
+
+    var actionKind: LaunchAction.Kind {
+        switch self {
+        case .browserURLs, .feishuLinks: return .url
+        case .obsidianFiles: return .file
+        }
+    }
+}
+
+private func launchContentKind(for bundleID: String) -> LaunchContentKind? {
+    switch bundleID {
+    case "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary", "com.google.Chrome.dev",
+         "org.chromium.Chromium", "company.thebrowser.Browser", "com.apple.Safari", "org.mozilla.firefox",
+         "com.brave.Browser", "com.microsoft.edgemac", "com.kagi.kagimacOS":
+        return .browserURLs
+    case "md.obsidian":
+        return .obsidianFiles
+    case "com.electron.lark":
+        return .feishuLinks
+    default:
+        return nil
+    }
+}
+
+private func supportedLaunchActions(_ actions: [LaunchAction], for bundleID: String) -> [LaunchAction] {
+    guard let kind = launchContentKind(for: bundleID) else { return [] }
+    return actions.filter { $0.kind == kind.actionKind }
+}
+
+@MainActor
+private func requestExitApps(_ exitApps: [String: String]) -> [String] {
+    var failedNames: [String] = []
+    for (bundleID, appName) in exitApps.sorted(by: { $0.value.localizedStandardCompare($1.value) == .orderedAscending }) {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
+        }) else { continue }
+        if !app.terminate() {
+            failedNames.append(appName)
+        }
+    }
+    return failedNames
+}
+
+@MainActor
+private func performLaunchActions(_ actions: [LaunchAction], in applicationURL: URL? = nil) {
+    for action in actions {
+        let url: URL?
+        switch action.kind {
+        case .url:
+            url = URL(string: action.value)
+        case .file:
+            url = URL(fileURLWithPath: action.value)
+        }
+        guard let url else { continue }
+        if let applicationURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            NSWorkspace.shared.open(
+                [url],
+                withApplicationAt: applicationURL,
+                configuration: configuration,
+                completionHandler: nil
+            )
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
 struct DisplayDescriptor: Codable, Hashable {
     let id: String
     let name: String
@@ -78,16 +180,27 @@ struct StoredScenario: Codable {
     let id: String
     var name: String
     var rules: [String: [PlacementRule]]
+    var launchActions: [String: [LaunchAction]]
+    var exitApps: [String: String]
     var isSystemDefault: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, name, rules, isSystemDefault
+        case id, name, rules, launchActions, exitApps, isSystemDefault
     }
 
-    init(id: String, name: String, rules: [String: [PlacementRule]], isSystemDefault: Bool = false) {
+    init(
+        id: String,
+        name: String,
+        rules: [String: [PlacementRule]],
+        launchActions: [String: [LaunchAction]] = [:],
+        exitApps: [String: String] = [:],
+        isSystemDefault: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.rules = rules
+        self.launchActions = launchActions
+        self.exitApps = exitApps
         self.isSystemDefault = isSystemDefault
     }
 
@@ -96,6 +209,8 @@ struct StoredScenario: Codable {
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         rules = try container.decode([String: [PlacementRule]].self, forKey: .rules)
+        launchActions = try container.decodeIfPresent([String: [LaunchAction]].self, forKey: .launchActions) ?? [:]
+        exitApps = try container.decodeIfPresent([String: String].self, forKey: .exitApps) ?? [:]
         isSystemDefault = try container.decodeIfPresent(Bool.self, forKey: .isSystemDefault)
             ?? (id == "default" && (name == "默认" || name == "Default"))
     }
@@ -144,12 +259,20 @@ final class RuleStore {
 
     var storedEnvironments: [StoredEnvironment] {
         normalizeEnvironmentKeys()
-        return environments.values.sorted { lhs, rhs in
+        var result = Array(environments.values)
+        if environments[currentEnvironment.key] == nil {
+            result.append(makeEnvironment(from: currentEnvironment))
+        }
+        return result.sorted { lhs, rhs in
             if lhs.key == rhs.key { return false }
             if lhs.key == currentEnvironment.key { return true }
             if rhs.key == currentEnvironment.key { return false }
             return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
         }
+    }
+
+    func hasStoredEnvironment(_ key: String) -> Bool {
+        environments[key] != nil
     }
 
     var currentEnvironmentName: String {
@@ -165,8 +288,8 @@ final class RuleStore {
     }
 
     var allBundleIDs: [String] {
-        guard let rules = currentScenario?.rules else { return [] }
-        return Array(rules.keys)
+        guard let scenario = currentScenario else { return [] }
+        return Array(Set(scenario.rules.keys).union(scenario.launchActions.keys))
     }
 
     func rules(for bundleID: String) -> [PlacementRule] {
@@ -179,6 +302,22 @@ final class RuleStore {
         return id.flatMap { environment.scenarios[$0]?.rules[bundleID] } ?? []
     }
 
+    func launchActions(for bundleID: String) -> [LaunchAction] {
+        currentScenario?.launchActions[bundleID] ?? []
+    }
+
+    func launchActions(for bundleID: String, inEnvironment key: String, scenarioID: String? = nil) -> [LaunchAction] {
+        guard let environment = environments[key] else { return [] }
+        let id = scenarioID ?? environment.activeScenarioID
+        return id.flatMap { environment.scenarios[$0]?.launchActions[bundleID] } ?? []
+    }
+
+    func exitApps(inEnvironment key: String, scenarioID: String? = nil) -> [String: String] {
+        guard let environment = environments[key] else { return [:] }
+        let id = scenarioID ?? environment.activeScenarioID
+        return id.flatMap { environment.scenarios[$0]?.exitApps } ?? [:]
+    }
+
     func displayLabel(for rule: PlacementRule, inEnvironment key: String) -> String {
         guard let display = environments[key]?.displays.first(where: { $0.id == rule.displayID }) else {
             return rule.displayLabel
@@ -187,13 +326,22 @@ final class RuleStore {
     }
 
     func scenarios(for environmentKey: String) -> [StoredScenario] {
-        environments[environmentKey]?.scenarios.values.sorted {
+        let scenarios: [StoredScenario]
+        if let stored = environments[environmentKey]?.scenarios.values {
+            scenarios = Array(stored)
+        } else if environmentKey == currentEnvironment.key {
+            scenarios = Array(makeEnvironment(from: currentEnvironment).scenarios.values)
+        } else {
+            scenarios = []
+        }
+        return scenarios.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        } ?? []
+        }
     }
 
     func activeScenarioID(for environmentKey: String) -> String? {
         environments[environmentKey]?.activeScenarioID
+            ?? (environmentKey == currentEnvironment.key ? "default" : nil)
     }
 
     @discardableResult
@@ -222,10 +370,75 @@ final class RuleStore {
     }
 
     @discardableResult
+    func setLaunchActions(
+        _ actions: [LaunchAction],
+        for bundleID: String,
+        inEnvironment key: String,
+        scenarioID: String
+    ) -> Bool {
+        guard var environment = environments[key],
+              var scenario = environment.scenarios[scenarioID] else { return false }
+        let previous = environment
+        if actions.isEmpty {
+            scenario.launchActions.removeValue(forKey: bundleID)
+        } else {
+            scenario.launchActions[bundleID] = actions
+        }
+        environment.scenarios[scenarioID] = scenario
+        environments[key] = environment
+        guard persist() else {
+            environments[key] = previous
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    func addExitApps(
+        _ apps: [String: String],
+        inEnvironment key: String,
+        scenarioID: String
+    ) -> Bool {
+        guard var environment = environments[key],
+              var scenario = environment.scenarios[scenarioID] else { return false }
+        let previous = environment
+        for (bundleID, appName) in apps where scenario.rules[bundleID] == nil {
+            scenario.exitApps[bundleID] = appName
+        }
+        environment.scenarios[scenarioID] = scenario
+        environments[key] = environment
+        guard persist() else {
+            environments[key] = previous
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    func removeExitApp(
+        bundleID: String,
+        fromEnvironment key: String,
+        scenarioID: String
+    ) -> Bool {
+        guard var environment = environments[key],
+              var scenario = environment.scenarios[scenarioID] else { return false }
+        let previous = environment
+        scenario.exitApps.removeValue(forKey: bundleID)
+        environment.scenarios[scenarioID] = scenario
+        environments[key] = environment
+        guard persist() else {
+            environments[key] = previous
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
     func remove(bundleID: String) -> Bool {
         let previous = environments[currentEnvironment.key]
         guard let scenarioID = environments[currentEnvironment.key]?.activeScenarioID else { return false }
         environments[currentEnvironment.key]?.scenarios[scenarioID]?.rules.removeValue(forKey: bundleID)
+        environments[currentEnvironment.key]?.scenarios[scenarioID]?.launchActions.removeValue(forKey: bundleID)
         guard persist() else {
             environments[currentEnvironment.key] = previous
             return false
@@ -235,12 +448,18 @@ final class RuleStore {
 
     @discardableResult
     func renameEnvironment(key: String, to name: String?) -> Bool {
-        guard let previous = environments[key], var environment = environments[key] else { return false }
+        let previous = environments[key]
+        guard var environment = environments[key]
+                ?? (key == currentEnvironment.key ? makeEnvironment(from: currentEnvironment) : nil) else { return false }
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         environment.customName = trimmed.isEmpty ? nil : trimmed
         environments[key] = environment
         guard persist() else {
-            environments[key] = previous
+            if let previous {
+                environments[key] = previous
+            } else {
+                environments.removeValue(forKey: key)
+            }
             return false
         }
         return true
@@ -270,6 +489,7 @@ final class RuleStore {
         guard let activeID = environments[key]?.activeScenarioID else { return false }
         let targetID = scenarioID ?? activeID
         environments[key]?.scenarios[targetID]?.rules.removeValue(forKey: bundleID)
+        environments[key]?.scenarios[targetID]?.launchActions.removeValue(forKey: bundleID)
         guard persist() else {
             environments[key] = previous
             return false
@@ -303,7 +523,9 @@ final class RuleStore {
         let scenario = StoredScenario(
             id: UUID().uuidString,
             name: trimmed.isEmpty ? L10n.text("New workspace") : trimmed,
-            rules: source?.rules ?? [:]
+            rules: source?.rules ?? [:],
+            launchActions: source?.launchActions ?? [:],
+            exitApps: source?.exitApps ?? [:]
         )
         let previous = environment
         environment.scenarios[scenario.id] = scenario
@@ -855,6 +1077,7 @@ final class HoverFeedbackButton: NSButton {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard isEnabled else { return }
         isHovering = true
         updateAppearance(animated: true)
         onHoverChanged?(true)
@@ -873,6 +1096,7 @@ final class HoverFeedbackButton: NSButton {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
         animate(scale: 0.97, background: nil)
         super.mouseDown(with: event)
         updateAppearance(animated: true)
@@ -1656,6 +1880,7 @@ final class PopoverViewController: NSViewController {
         appActionStack.arrangedSubviews.forEach { appActionStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         footerStack.arrangedSubviews.forEach { footerStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         displayPreview?.highlight([])
+        notice.textColor = .secondaryLabelColor
         environmentValue.stringValue = store.currentEnvironmentName
         scenarioValue.stringValue = store.currentScenarioName
 
@@ -1921,16 +2146,24 @@ final class PopoverViewController: NSViewController {
         if let snapshot, !store.rules(for: snapshot.bundleID).isEmpty,
            rules.count < store.rules(for: snapshot.bundleID).count {
             notice.isHidden = false
+            notice.textColor = .systemOrange
             notice.stringValue = L10n.text("Partial window snapshot could not replace the existing rules. Wait for the windows to settle and try again.")
             return
         }
         guard store.save(rules) else {
             notice.isHidden = false
+            notice.textColor = .systemOrange
             notice.stringValue = L10n.text("Save failed: %@", store.lastPersistenceError ?? L10n.text("Unable to write the rules file."))
             return
         }
         onChange()
-        onClosePopover()
+        render()
+        notice.isHidden = false
+        notice.textColor = .systemGreen
+        notice.stringValue = L10n.text("Layout saved")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.onClosePopover()
+        }
     }
 
     @objc private func restoreLayout() {
@@ -1983,7 +2216,12 @@ final class PopoverViewController: NSViewController {
         let alert = NSAlert()
         alert.icon = displayHarborIcon()
         alert.messageText = L10n.text("Switch workspace")
-        alert.informativeText = L10n.text("After switching, the next workspace application or matching App launch will use the new layout.")
+        let selectedScenarioID = picker.selectedItem?.representedObject as? String
+        let exitApps = store.exitApps(inEnvironment: store.currentEnvironment.key, scenarioID: selectedScenarioID)
+        let exitNames = exitApps.values.sorted().joined(separator: L10n.listSeparator)
+        alert.informativeText = exitNames.isEmpty
+            ? L10n.text("After switching, the next workspace application or matching App launch will use the new layout.")
+            : L10n.text("After switching, the next workspace application or matching App launch will use the new layout.\nThis workspace will request exit for: %@", exitNames)
         alert.accessoryView = picker
         alert.addButton(withTitle: L10n.text("Switch"))
         alert.addButton(withTitle: L10n.text("Cancel"))
@@ -1994,19 +2232,33 @@ final class PopoverViewController: NSViewController {
             notice.stringValue = L10n.text("Switch failed: %@", store.lastPersistenceError ?? L10n.text("Unable to write the rules file."))
             return
         }
+        let failedExitNames = requestExitApps(exitApps)
         render()
+        if !failedExitNames.isEmpty {
+            notice.isHidden = false
+            notice.stringValue = L10n.text("Could not request exit for: %@", failedExitNames.joined(separator: L10n.listSeparator))
+        }
         onChange()
     }
 
     private func launchAndRestore(bundleID: String) {
         let rules = store.rules(for: bundleID)
         guard !rules.isEmpty else { return }
+        let actions = supportedLaunchActions(store.launchActions(for: bundleID), for: bundleID)
 
         if let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
         }) {
             app.activate(options: [.activateAllWindows])
-            _ = WindowProbe.restore(app: app, using: rules)
+            if actions.isEmpty {
+                _ = WindowProbe.restore(app: app, using: rules)
+            } else {
+                performLaunchActions(actions, in: app.bundleURL)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    app.activate(options: [.activateAllWindows])
+                    _ = WindowProbe.restore(app: app, using: rules)
+                }
+            }
             return
         }
 
@@ -2014,7 +2266,18 @@ final class PopoverViewController: NSViewController {
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, _ in
+            guard !actions.isEmpty else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                performLaunchActions(actions, in: app?.bundleURL ?? url)
+                if let app {
+                    app.activate(options: [.activateAllWindows])
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        _ = WindowProbe.restore(app: app, using: rules)
+                    }
+                }
+            }
+        }
     }
 
     @objc private func deleteRule() {
@@ -2066,6 +2329,7 @@ final class EnvironmentManagerViewController: NSViewController {
     private var screenObserver: NSObjectProtocol?
     private var stateRefreshTimer: Timer?
     private var appStateSignature = ""
+    private var shouldRevealCurrentEnvironment = true
 
     init(store: RuleStore, onChange: @escaping () -> Void) {
         self.store = store
@@ -2076,8 +2340,11 @@ final class EnvironmentManagerViewController: NSViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func refresh() {
+    func refresh(revealCurrentEnvironment: Bool = false) {
         guard isViewLoaded else { return }
+        if revealCurrentEnvironment {
+            shouldRevealCurrentEnvironment = true
+        }
         render()
     }
 
@@ -2200,10 +2467,22 @@ final class EnvironmentManagerViewController: NSViewController {
             return
         }
 
+        var currentCard: NSView?
         environments.forEach {
             let card = environmentView($0)
             listStack.addArrangedSubview(card)
             card.widthAnchor.constraint(equalTo: listStack.widthAnchor).isActive = true
+            if $0.key == store.currentEnvironment.key {
+                currentCard = card
+            }
+        }
+
+        guard shouldRevealCurrentEnvironment, let currentCard else { return }
+        DispatchQueue.main.async { [weak self, weak currentCard] in
+            guard let self, let currentCard else { return }
+            self.view.layoutSubtreeIfNeeded()
+            _ = currentCard.scrollToVisible(currentCard.bounds)
+            self.shouldRevealCurrentEnvironment = false
         }
     }
 
@@ -2261,6 +2540,8 @@ final class EnvironmentManagerViewController: NSViewController {
     }
 
     private func environmentView(_ environment: StoredEnvironment) -> NSView {
+        let isStored = store.hasStoredEnvironment(environment.key)
+        let isCurrent = environment.key == store.currentEnvironment.key
         let box = NSBox()
         box.boxType = .custom
         box.cornerRadius = 14
@@ -2290,7 +2571,7 @@ final class EnvironmentManagerViewController: NSViewController {
             name.bottomAnchor.constraint(equalTo: titleRow.bottomAnchor)
         ]
 
-        if environment.key == store.currentEnvironment.key {
+        if isCurrent {
             let current = NSTextField(labelWithString: L10n.text("In use"))
             current.font = .systemFont(ofSize: 11, weight: .semibold)
             current.textColor = .systemGreen
@@ -2310,6 +2591,7 @@ final class EnvironmentManagerViewController: NSViewController {
             hoverTint: .controlAccentColor
         )
         rename.identifier = NSUserInterfaceItemIdentifier(environment.key)
+        rename.isEnabled = isStored || environment.key == store.currentEnvironment.key
         rename.translatesAutoresizingMaskIntoConstraints = false
         titleRow.addSubview(rename)
 
@@ -2320,6 +2602,13 @@ final class EnvironmentManagerViewController: NSViewController {
             hoverTint: .systemRed
         )
         delete.identifier = NSUserInterfaceItemIdentifier(environment.key)
+        let canDeleteEnvironment = isStored && !isCurrent
+        delete.isEnabled = canDeleteEnvironment
+        delete.setNormalTintColor(canDeleteEnvironment ? .secondaryLabelColor : .tertiaryLabelColor)
+        delete.setHoverTintColor(canDeleteEnvironment ? .systemRed : nil)
+        if !canDeleteEnvironment {
+            delete.toolTip = L10n.text("Current display setup cannot be deleted")
+        }
         delete.translatesAutoresizingMaskIntoConstraints = false
         titleRow.addSubview(delete)
 
@@ -2335,6 +2624,7 @@ final class EnvironmentManagerViewController: NSViewController {
         let selectedScenario = scenarios.first { $0.id == environment.activeScenarioID } ?? scenarios.first
         let selectedScenarioID = selectedScenario?.id ?? ""
         let selectedRules = selectedScenario?.rules ?? [:]
+        let selectedExitApps = selectedScenario?.exitApps ?? [:]
         let meta = NSTextField(labelWithString: "\(L10n.text(environment.displays.count == 1 ? "Single-display setup" : "%ld-display setup", environment.displays.count)) · \(L10n.text("%ld workspaces", scenarios.count))")
         meta.font = .systemFont(ofSize: 12)
         meta.textColor = .secondaryLabelColor
@@ -2374,6 +2664,7 @@ final class EnvironmentManagerViewController: NSViewController {
         scenarioPicker.target = self
         scenarioPicker.action = #selector(selectScenario(_:))
         scenarioPicker.identifier = NSUserInterfaceItemIdentifier(environment.key)
+        scenarioPicker.isEnabled = isStored
         scenarioPicker.translatesAutoresizingMaskIntoConstraints = false
         scenarioHeader.addSubview(scenarioPicker)
 
@@ -2384,6 +2675,7 @@ final class EnvironmentManagerViewController: NSViewController {
             hoverTint: .controlAccentColor
         )
         newScenario.identifier = NSUserInterfaceItemIdentifier("\(environment.key)\n\(selectedScenarioID)")
+        newScenario.isEnabled = isStored
         newScenario.translatesAutoresizingMaskIntoConstraints = false
         scenarioHeader.addSubview(newScenario)
         let renameScenario = iconButton(
@@ -2393,6 +2685,7 @@ final class EnvironmentManagerViewController: NSViewController {
             hoverTint: .controlAccentColor
         )
         renameScenario.identifier = NSUserInterfaceItemIdentifier("\(environment.key)\n\(selectedScenarioID)")
+        renameScenario.isEnabled = isStored
         renameScenario.translatesAutoresizingMaskIntoConstraints = false
         scenarioHeader.addSubview(renameScenario)
         let deleteScenario = iconButton(
@@ -2401,7 +2694,13 @@ final class EnvironmentManagerViewController: NSViewController {
             action: #selector(deleteScenario(_:)),
             hoverTint: .systemRed
         )
-        deleteScenario.isEnabled = scenarios.count > 1
+        let canDeleteScenario = isStored && scenarios.count > 1
+        deleteScenario.isEnabled = canDeleteScenario
+        deleteScenario.setNormalTintColor(canDeleteScenario ? .secondaryLabelColor : .tertiaryLabelColor)
+        deleteScenario.setHoverTintColor(canDeleteScenario ? .systemRed : nil)
+        if !canDeleteScenario {
+            deleteScenario.toolTip = L10n.text("At least one workspace must remain")
+        }
         deleteScenario.identifier = NSUserInterfaceItemIdentifier("\(environment.key)\n\(selectedScenarioID)")
         deleteScenario.translatesAutoresizingMaskIntoConstraints = false
         scenarioHeader.addSubview(deleteScenario)
@@ -2421,7 +2720,7 @@ final class EnvironmentManagerViewController: NSViewController {
         rulesHeader.translatesAutoresizingMaskIntoConstraints = false
         rulesHeader.addSubview(rulesTitle)
         let unopenedBundleIDs = selectedRules.keys.filter { !isAppRunning(bundleID: $0) }
-        let environmentIsActive = environment.key == store.currentEnvironment.key
+        let environmentIsActive = isCurrent
         let openAll: HoverFeedbackButton?
         if environmentIsActive && unopenedBundleIDs.count > 1 {
             let button = HoverFeedbackButton(title: L10n.text("Open all"), target: self, action: #selector(openAllRuleApps(_:)))
@@ -2467,6 +2766,7 @@ final class EnvironmentManagerViewController: NSViewController {
                     bundleID: bundleID,
                     appName: firstRule.appName,
                     placementRules: placementRules,
+                    launchActions: selectedScenario?.launchActions[bundleID] ?? [],
                     allowsAppLaunch: environmentIsActive,
                     onHover: { isHovering in
                         displayPreview.highlight(isHovering ? placementRules : [])
@@ -2486,6 +2786,60 @@ final class EnvironmentManagerViewController: NSViewController {
                 rule.translatesAutoresizingMaskIntoConstraints = false
                 rule.widthAnchor.constraint(equalTo: rules.widthAnchor).isActive = true
             }
+        }
+
+        let exitDivider = NSBox()
+        exitDivider.boxType = .separator
+        exitDivider.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        exitDivider.translatesAutoresizingMaskIntoConstraints = false
+
+        let exitHeader = NSView()
+        exitHeader.translatesAutoresizingMaskIntoConstraints = false
+        let exitTitle = NSTextField(labelWithString: L10n.text("Exit Apps when entering"))
+        exitTitle.font = .systemFont(ofSize: 12, weight: .semibold)
+        exitTitle.textColor = .labelColor
+        exitTitle.alignment = .left
+        exitTitle.translatesAutoresizingMaskIntoConstraints = false
+        exitHeader.addSubview(exitTitle)
+        let addExitApp = iconButton(
+            title: L10n.text("Add App to exit"),
+            symbolName: "plus",
+            action: #selector(addExitApp(_:)),
+            hoverTint: .controlAccentColor
+        )
+        addExitApp.identifier = NSUserInterfaceItemIdentifier("\(environment.key)\n\(selectedScenarioID)")
+        addExitApp.isEnabled = isStored
+        addExitApp.translatesAutoresizingMaskIntoConstraints = false
+        exitHeader.addSubview(addExitApp)
+
+        let exitApps = NSStackView()
+        exitApps.orientation = .vertical
+        exitApps.alignment = .width
+        exitApps.spacing = 0
+        exitApps.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(exitDivider)
+        content.addSubview(exitHeader)
+        content.addSubview(exitApps)
+
+        if selectedExitApps.isEmpty {
+            let empty = NSTextField(wrappingLabelWithString: L10n.text("No Apps will be asked to exit when entering this workspace."))
+            empty.font = .systemFont(ofSize: 13)
+            empty.textColor = .secondaryLabelColor
+            empty.alignment = .left
+            empty.translatesAutoresizingMaskIntoConstraints = false
+            exitApps.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalTo: exitApps.widthAnchor).isActive = true
+        } else {
+            selectedExitApps.keys.sorted { (selectedExitApps[$0] ?? $0).localizedStandardCompare(selectedExitApps[$1] ?? $1) == .orderedAscending }
+                .forEach { bundleID in
+                    guard let appName = selectedExitApps[bundleID] else { return }
+                    exitApps.addArrangedSubview(exitAppView(
+                        environmentKey: environment.key,
+                        scenarioID: selectedScenarioID,
+                        bundleID: bundleID,
+                        appName: appName
+                    ))
+                }
         }
 
         NSLayoutConstraint.activate([
@@ -2533,7 +2887,22 @@ final class EnvironmentManagerViewController: NSViewController {
             rules.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             rules.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             rules.topAnchor.constraint(equalTo: rulesHeader.bottomAnchor, constant: 6),
-            rules.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+            rules.bottomAnchor.constraint(equalTo: exitDivider.topAnchor, constant: -14),
+            exitDivider.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            exitDivider.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            exitHeader.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            exitHeader.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            exitHeader.topAnchor.constraint(equalTo: exitDivider.bottomAnchor, constant: 10),
+            exitHeader.heightAnchor.constraint(equalToConstant: 24),
+            exitTitle.leadingAnchor.constraint(equalTo: exitHeader.leadingAnchor),
+            exitTitle.centerYAnchor.constraint(equalTo: exitHeader.centerYAnchor),
+            addExitApp.trailingAnchor.constraint(equalTo: exitHeader.trailingAnchor),
+            addExitApp.centerYAnchor.constraint(equalTo: exitHeader.centerYAnchor),
+            exitTitle.trailingAnchor.constraint(lessThanOrEqualTo: addExitApp.leadingAnchor, constant: -12),
+            exitApps.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            exitApps.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            exitApps.topAnchor.constraint(equalTo: exitHeader.bottomAnchor, constant: 6),
+            exitApps.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
         if let openAll {
             NSLayoutConstraint.activate([
@@ -2575,6 +2944,7 @@ final class EnvironmentManagerViewController: NSViewController {
         bundleID: String,
         appName: String,
         placementRules: [PlacementRule],
+        launchActions: [LaunchAction],
         allowsAppLaunch: Bool,
         onHover: @escaping (Bool) -> Void
     ) -> NSView {
@@ -2586,12 +2956,26 @@ final class EnvironmentManagerViewController: NSViewController {
         let displayNames = Array(Set(placementRules.map { store.displayLabel(for: $0, inEnvironment: environmentKey) })).sorted().joined(separator: L10n.listSeparator)
         let fullScreenCount = placementRules.filter { $0.isFullScreen == true }.count
         let appIsOpen = isAppRunning(bundleID: bundleID)
+        let contentKind = launchContentKind(for: bundleID)
+        let configuredLaunchActions = supportedLaunchActions(launchActions, for: bundleID)
         var detailParts = [L10n.text("%ld windows", placementRules.count), displayNames]
         if !appIsOpen {
             detailParts.append(L10n.text("Unopened"))
         }
         if fullScreenCount > 0 {
             detailParts.append(fullScreenCount == placementRules.count ? L10n.text("Dedicated Space") : L10n.text("Includes Dedicated Space"))
+        }
+        if !configuredLaunchActions.isEmpty, let contentKind {
+            let key: String
+            switch contentKind {
+            case .browserURLs:
+                key = "%ld startup URLs"
+            case .obsidianFiles:
+                key = "%ld startup files"
+            case .feishuLinks:
+                key = "%ld startup Feishu links"
+            }
+            detailParts.append(L10n.text(key, configuredLaunchActions.count))
         }
         let detailViews = detailParts.enumerated().reduce(into: [NSView]()) { views, item in
             let (index, part) = item
@@ -2631,6 +3015,29 @@ final class EnvironmentManagerViewController: NSViewController {
             open = nil
         }
 
+        let configure: HoverFeedbackButton?
+        if let contentKind {
+            let title: String
+            switch contentKind {
+            case .browserURLs:
+                title = L10n.text("Configure startup URLs")
+            case .obsidianFiles:
+                title = L10n.text("Configure startup files")
+            case .feishuLinks:
+                title = L10n.text("Configure Feishu links")
+            }
+            let button = iconButton(
+                title: title,
+                symbolName: "arrow.up.forward.app",
+                action: #selector(configureLaunchActions(_:)),
+                hoverTint: .controlAccentColor
+            )
+            button.identifier = NSUserInterfaceItemIdentifier("\(environmentKey)\n\(scenarioID)\n\(bundleID)")
+            configure = button
+        } else {
+            configure = nil
+        }
+
         let delete = HoverFeedbackButton(title: L10n.text("Delete rule"), target: self, action: #selector(deleteRule(_:)))
         delete.controlSize = .small
         delete.setNormalTintColor(.secondaryLabelColor)
@@ -2641,6 +3048,10 @@ final class EnvironmentManagerViewController: NSViewController {
         labels.translatesAutoresizingMaskIntoConstraints = false
         delete.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(labels)
+        if let configure {
+            configure.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(configure)
+        }
         row.addSubview(delete)
         if let open {
             open.translatesAutoresizingMaskIntoConstraints = false
@@ -2676,15 +3087,77 @@ final class EnvironmentManagerViewController: NSViewController {
             delete.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             delete.trailingAnchor.constraint(equalTo: row.trailingAnchor)
         ])
+        if let configure {
+            NSLayoutConstraint.activate([
+                configure.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                configure.trailingAnchor.constraint(equalTo: delete.leadingAnchor, constant: -12)
+            ])
+        }
         if let open {
             NSLayoutConstraint.activate([
                 labels.trailingAnchor.constraint(lessThanOrEqualTo: open.leadingAnchor, constant: -24),
-                open.trailingAnchor.constraint(equalTo: delete.leadingAnchor, constant: -12),
+                open.trailingAnchor.constraint(equalTo: (configure ?? delete).leadingAnchor, constant: -12),
                 open.centerYAnchor.constraint(equalTo: row.centerYAnchor)
             ])
+        } else if let configure {
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: configure.leadingAnchor, constant: -24).isActive = true
         } else {
             labels.trailingAnchor.constraint(lessThanOrEqualTo: delete.leadingAnchor, constant: -24).isActive = true
         }
+        return row
+    }
+
+    private func exitAppView(
+        environmentKey: String,
+        scenarioID: String,
+        bundleID: String,
+        appName: String
+    ) -> NSView {
+        let title = NSTextField(labelWithString: appName)
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = .labelColor
+        title.alignment = .left
+        let detail = NSTextField(labelWithString: L10n.text("Request exit when entering this workspace"))
+        detail.font = .systemFont(ofSize: 12)
+        detail.textColor = .secondaryLabelColor
+        detail.alignment = .left
+        let labels = NSStackView(views: [title, detail])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 4
+
+        let remove = HoverFeedbackButton(title: L10n.text("Remove"), target: self, action: #selector(removeExitApp(_:)))
+        remove.controlSize = .small
+        remove.setNormalTintColor(.secondaryLabelColor)
+        remove.identifier = NSUserInterfaceItemIdentifier("\(environmentKey)\n\(scenarioID)\n\(bundleID)")
+
+        let row = HoverableRuleRow()
+        labels.translatesAutoresizingMaskIntoConstraints = false
+        remove.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(labels)
+        row.addSubview(remove)
+        if let image = ApplicationIcon.image(for: bundleID) {
+            let icon = NSImageView(image: image)
+            icon.imageScaling = .scaleProportionallyDown
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(icon)
+            NSLayoutConstraint.activate([
+                icon.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+                icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                icon.widthAnchor.constraint(equalToConstant: 28),
+                icon.heightAnchor.constraint(equalToConstant: 28),
+                labels.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10)
+            ])
+        } else {
+            labels.leadingAnchor.constraint(equalTo: row.leadingAnchor).isActive = true
+        }
+        NSLayoutConstraint.activate([
+            labels.topAnchor.constraint(equalTo: row.topAnchor, constant: 10),
+            labels.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -10),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: remove.leadingAnchor, constant: -24),
+            remove.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            remove.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
         return row
     }
 
@@ -2703,23 +3176,268 @@ final class EnvironmentManagerViewController: NSViewController {
         activateRule(bundleID: parts[2], environmentKey: parts[0], scenarioID: parts[1])
     }
 
+    @objc private func configureLaunchActions(_ sender: NSButton) {
+        let parts = (sender.identifier?.rawValue ?? "")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard parts.count == 3,
+              let environment = store.storedEnvironments.first(where: { $0.key == parts[0] }),
+              let scenario = environment.scenarios[parts[1]],
+              let contentKind = launchContentKind(for: parts[2]),
+              let appName = scenario.rules[parts[2]]?.first?.appName else { return }
+
+        let existing = supportedLaunchActions(scenario.launchActions[parts[2]] ?? [], for: parts[2])
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 54))
+        text.isRichText = false
+        text.font = .systemFont(ofSize: 12)
+        text.string = existing.map(\.value).joined(separator: "\n")
+
+        let scroll = launchActionTextScrollView(text)
+        let fieldTitle: String
+        let informativeTextKey: String
+        switch contentKind {
+        case .browserURLs:
+            fieldTitle = L10n.text("URLs (one per line)")
+            informativeTextKey = "Configure startup URLs for %@."
+        case .obsidianFiles:
+            fieldTitle = L10n.text("Files (one per line)")
+            informativeTextKey = "Configure startup files for %@."
+        case .feishuLinks:
+            fieldTitle = L10n.text("Feishu AppLinks (one per line)")
+            informativeTextKey = "Configure Feishu links for %@."
+        }
+        let fieldLabel = NSTextField(labelWithString: fieldTitle)
+        fieldLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        fieldLabel.textColor = .secondaryLabelColor
+        fieldLabel.alignment = .left
+        let accessory = NSStackView(views: [fieldLabel, scroll])
+        accessory.orientation = .vertical
+        accessory.alignment = .width
+        accessory.spacing = 6
+        accessory.translatesAutoresizingMaskIntoConstraints = false
+
+        // NSAlert does not reliably preserve an NSStackView's frame as the
+        // accessory width. A fixed-size wrapper gives the fields a stable
+        // readable measure and lets the stack fill it edge to edge.
+        let accessoryContainer = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 78))
+        accessoryContainer.addSubview(accessory)
+        NSLayoutConstraint.activate([
+            accessory.leadingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor),
+            accessory.trailingAnchor.constraint(equalTo: accessoryContainer.trailingAnchor),
+            accessory.topAnchor.constraint(equalTo: accessoryContainer.topAnchor),
+            accessory.bottomAnchor.constraint(equalTo: accessoryContainer.bottomAnchor)
+        ])
+        scroll.heightAnchor.constraint(equalToConstant: 54).isActive = true
+
+        let alert = NSAlert()
+        alert.icon = displayHarborIcon()
+        alert.messageText = L10n.text("Configure launch content")
+        alert.informativeText = L10n.text(informativeTextKey, appName)
+        alert.accessoryView = accessoryContainer
+        alert.addButton(withTitle: L10n.text("Save"))
+        alert.addButton(withTitle: L10n.text("Clear"))
+        alert.addButton(withTitle: L10n.text("Cancel"))
+        presentAlert(alert) { [weak self] response in
+            guard let self else { return }
+            guard response == .alertFirstButtonReturn || response == .alertSecondButtonReturn else { return }
+            let actions: [LaunchAction]
+            if response == .alertSecondButtonReturn {
+                actions = []
+            } else {
+                let values = Self.nonEmptyLines(from: text.string)
+                switch contentKind {
+                case .browserURLs:
+                    if let invalidURL = values.first(where: { URL(string: $0)?.scheme == nil }) {
+                        self.showLaunchActionError(L10n.text("URL must include a scheme, for example https:// or obsidian://: %@", invalidURL))
+                        return
+                    }
+                case .feishuLinks:
+                    if let invalidLink = values.first(where: { !Self.isValidFeishuLink($0) }) {
+                        self.showLaunchActionError(L10n.text("Feishu links must use feishu://... or https://applink.feishu.cn/...: %@", invalidLink))
+                        return
+                    }
+                case .obsidianFiles:
+                    break
+                }
+                actions = values.map { LaunchAction(kind: contentKind.actionKind, value: $0) }
+            }
+            guard self.store.setLaunchActions(actions, for: parts[2], inEnvironment: parts[0], scenarioID: parts[1]) else {
+                self.showPersistenceError()
+                return
+            }
+            self.render()
+            self.onChange()
+        }
+    }
+
+    @objc private func addExitApp(_ sender: NSButton) {
+        let parts = (sender.identifier?.rawValue ?? "").split(separator: "\n").map(String.init)
+        guard parts.count == 2,
+              let environment = store.storedEnvironments.first(where: { $0.key == parts[0] }),
+              let scenario = environment.scenarios[parts[1]] else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = L10n.text("Add Apps to exit")
+        panel.prompt = L10n.text("Add")
+        panel.message = L10n.text("Choose the Apps that should receive a normal quit request when entering this workspace.")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+
+        let handleResponse: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self, response == .OK else { return }
+            var apps: [String: String] = [:]
+            for url in panel.urls {
+                guard let bundle = Bundle(url: url),
+                      let bundleID = bundle.bundleIdentifier,
+                      bundleID != Bundle.main.bundleIdentifier else { continue }
+                let appName = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                    ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                    ?? url.deletingPathExtension().lastPathComponent
+                guard scenario.rules[bundleID] == nil,
+                      scenario.exitApps[bundleID] == nil else { continue }
+                apps[bundleID] = appName
+            }
+            guard !apps.isEmpty else {
+                self.showExitAppError(L10n.text("Choose an App without an existing layout or exit rule."))
+                return
+            }
+            guard self.store.addExitApps(apps, inEnvironment: parts[0], scenarioID: parts[1]) else {
+                self.showPersistenceError()
+                return
+            }
+            self.render()
+            self.onChange()
+        }
+
+        if let window = view.window {
+            panel.beginSheetModal(for: window, completionHandler: handleResponse)
+        } else {
+            handleResponse(panel.runModal())
+        }
+    }
+
+    @objc private func removeExitApp(_ sender: NSButton) {
+        let parts = (sender.identifier?.rawValue ?? "").split(separator: "\n").map(String.init)
+        guard parts.count == 3,
+              let environment = store.storedEnvironments.first(where: { $0.key == parts[0] }),
+              let appName = environment.scenarios[parts[1]]?.exitApps[parts[2]] else { return }
+
+        let alert = NSAlert()
+        alert.icon = displayHarborIcon()
+        alert.messageText = L10n.text("Remove %@?", appName)
+        alert.informativeText = L10n.text("DisplayHarbor will no longer request this App to exit when entering the workspace.")
+        alert.addButton(withTitle: L10n.text("Remove"))
+        alert.addButton(withTitle: L10n.text("Cancel"))
+        alert.alertStyle = .warning
+        presentAlert(alert) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            guard self.store.removeExitApp(bundleID: parts[2], fromEnvironment: parts[0], scenarioID: parts[1]) else {
+                self.showPersistenceError()
+                return
+            }
+            self.render()
+            self.onChange()
+        }
+    }
+
+    private func launchActionTextScrollView(_ textView: NSTextView) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.documentView = textView
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.borderType = .bezelBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        textView.minSize = NSSize(width: 0, height: 54)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        return scroll
+    }
+
+    private static func nonEmptyLines(from text: String) -> [String] {
+        text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func isValidFeishuLink(_ value: String) -> Bool {
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased() else { return false }
+        switch scheme {
+        case "feishu", "lark":
+            return host == "applink"
+        case "https":
+            return host == "applink.feishu.cn"
+        default:
+            return false
+        }
+    }
+
+    private func showLaunchActionError(_ message: String) {
+        let alert = NSAlert()
+        alert.icon = displayHarborIcon()
+        alert.messageText = L10n.text("Unable to save launch content")
+        alert.informativeText = message
+        alert.addButton(withTitle: L10n.text("OK"))
+        presentAlert(alert) { _ in }
+    }
+
+    private func showExitAppError(_ message: String) {
+        let alert = NSAlert()
+        alert.icon = displayHarborIcon()
+        alert.messageText = L10n.text("Unable to add exit App")
+        alert.informativeText = message
+        alert.addButton(withTitle: L10n.text("OK"))
+        presentAlert(alert) { _ in }
+    }
+
     private func activateRule(bundleID: String, environmentKey: String, scenarioID: String? = nil) {
         guard let environment = store.storedEnvironments.first(where: { $0.key == environmentKey }),
               let targetScenarioID = scenarioID ?? environment.activeScenarioID,
               let rules = environment.scenarios[targetScenarioID]?.rules[bundleID],
               !rules.isEmpty else { return }
+        let actions = supportedLaunchActions(
+            store.launchActions(for: bundleID, inEnvironment: environmentKey, scenarioID: targetScenarioID),
+            for: bundleID
+        )
 
         if let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
         }) {
             app.activate(options: [.activateAllWindows])
-            _ = WindowProbe.restore(app: app, using: rules)
+            if actions.isEmpty {
+                _ = WindowProbe.restore(app: app, using: rules)
+            } else {
+                performLaunchActions(actions, in: app.bundleURL)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    app.activate(options: [.activateAllWindows])
+                    _ = WindowProbe.restore(app: app, using: rules)
+                }
+            }
             refresh()
             return
         }
 
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
-        _ = NSWorkspace.shared.open(url)
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, _ in
+            guard !actions.isEmpty else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                performLaunchActions(actions, in: app?.bundleURL ?? url)
+                app?.activate(options: [.activateAllWindows])
+                if let app {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        _ = WindowProbe.restore(app: app, using: rules)
+                    }
+                }
+            }
+        }
     }
 
     @objc private func openAllRuleApps(_ sender: NSButton) {
@@ -2765,6 +3483,7 @@ final class EnvironmentManagerViewController: NSViewController {
     @objc private func deleteEnvironment(_ sender: NSButton) {
         let key = sender.identifier?.rawValue ?? ""
         guard let environment = store.storedEnvironments.first(where: { $0.key == key }) else { return }
+        guard environment.key != store.currentEnvironment.key else { return }
 
         let alert = NSAlert()
         alert.icon = displayHarborIcon()
@@ -2819,7 +3538,16 @@ final class EnvironmentManagerViewController: NSViewController {
             showPersistenceError()
             return
         }
+        let failedExitNames: [String]
+        if environmentKey == store.currentEnvironment.key {
+            failedExitNames = requestExitApps(store.exitApps(inEnvironment: environmentKey, scenarioID: scenarioID))
+        } else {
+            failedExitNames = []
+        }
         render()
+        if !failedExitNames.isEmpty {
+            showExitFailure(failedExitNames)
+        }
         onChange()
     }
 
@@ -2905,6 +3633,15 @@ final class EnvironmentManagerViewController: NSViewController {
         alert.icon = displayHarborIcon()
         alert.messageText = L10n.text("Save failed")
         alert.informativeText = store.lastPersistenceError ?? L10n.text("Unable to write the rules file.")
+        alert.addButton(withTitle: L10n.text("OK"))
+        presentAlert(alert) { _ in }
+    }
+
+    private func showExitFailure(_ appNames: [String]) {
+        let alert = NSAlert()
+        alert.icon = displayHarborIcon()
+        alert.messageText = L10n.text("Some Apps did not exit")
+        alert.informativeText = L10n.text("DisplayHarbor could not request exit for: %@", appNames.joined(separator: L10n.listSeparator))
         alert.addButton(withTitle: L10n.text("OK"))
         presentAlert(alert) { _ in }
     }
@@ -3075,11 +3812,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openEnvironmentManager() {
+        applyCurrentEnvironment()
         NSApp.activate(ignoringOtherApps: true)
 
         let controller: EnvironmentManagerWindowController
         if let controller = environmentWindowController {
-            (controller.contentViewController as? EnvironmentManagerViewController)?.refresh()
+            (controller.contentViewController as? EnvironmentManagerViewController)?.refresh(revealCurrentEnvironment: true)
             controller.showWindow(nil)
             self.bringManagerWindowToFront(controller)
         } else {

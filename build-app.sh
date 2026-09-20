@@ -35,13 +35,17 @@ app_version="${app_version#v}"
 cp "$project_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
 cp -R "$project_dir/Resources/"*.lproj "$app_dir/Contents/Resources/"
 
-signing_identity="${DISPLAYHARBOR_SIGNING_IDENTITY:-DisplayHarbor Development}"
-if security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$signing_identity\""; then
-    codesign --force --deep --sign "$signing_identity" "$app_dir" >/dev/null
-    echo "Signed with $signing_identity"
-else
-    echo "Warning: stable signing identity not found; using ad hoc signing." >&2
-    echo "Run ./setup-dev-signing.sh once to preserve Accessibility permission across builds." >&2
-    codesign --force --deep --sign - "$app_dir" >/dev/null
+signing_identity="${DISPLAYHARBOR_SIGNING_IDENTITY:-}"
+if [[ -z "$signing_identity" ]]; then
+    signing_identity="$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*\"\(Developer ID Application:.*\)\"/\1/p' \
+        | head -n 1)"
 fi
+if [[ -z "$signing_identity" ]]; then
+    echo "Error: Developer ID Application identity not found." >&2
+    exit 1
+fi
+
+codesign --force --timestamp --options runtime --sign "$signing_identity" "$app_dir" >/dev/null
+echo "Signed with $signing_identity"
 echo "Built $app_dir"

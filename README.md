@@ -14,6 +14,8 @@ DisplayHarbor is a native macOS menu bar utility that remembers where your app w
 - Fork, rename, switch, and delete workspaces.
 - Automatically re-apply rules after displays connect, disconnect, or change arrangement.
 - Open and restore all currently unopened apps in the active workspace.
+- Configure apps that should receive a normal quit request when entering each workspace.
+- Configure supported App integrations, such as browser URLs, Feishu AppLinks, and Obsidian files.
 - Inspect and maintain display setups and app rules in the management window.
 - Follow the macOS preferred language (English and Simplified Chinese are included).
 
@@ -42,8 +44,8 @@ For normal use, download the latest arm64 **DMG** from the [GitHub Releases page
    ```
 
 3. Open the DMG and drag `DisplayHarbor.app` to the `Applications` shortcut.
-4. This release is not notarized. The first time, Control-click `DisplayHarbor.app` in Finder, choose **Open**, and confirm. If **Open** is not offered, go to **System Settings → Privacy & Security** and click **Open Anyway** for DisplayHarbor, then try again.
-5. The mounted DMG also contains `README.txt` and an optional **Open DisplayHarbor (Advanced).app** launcher. After verifying the checksum, advanced users can double-click that launcher directly from the mounted DMG; after confirmation, it installs or replaces `DisplayHarbor.app` in `/Applications`, removes the quarantine marker from the exact app path, and starts it. If macOS blocks the helper the first time, Control-click it in Finder and choose **Open**. It does not grant Accessibility permission and does not use `sudo`. The normal Finder flow is preferred.
+4. GitHub Releases are built with a Developer ID signature and submitted to Apple for notarization by Actions. A normally configured release should not require bypassing the “unknown developer” warning; you still need to grant DisplayHarbor access under **System Settings → Privacy & Security → Accessibility**.
+5. The mounted DMG also contains `README.txt`; launch DisplayHarbor from `/Applications` after installation.
 
 ZIP fallback:
 
@@ -58,9 +60,9 @@ If Finder shows a generic placeholder icon, relaunch Finder after installation. 
 
 ## Updating
 
-DisplayHarbor checks the GitHub Releases API periodically. When a newer version is available, the menu bar panel shows a **New version** action that opens the matching release page. This free, non-notarized release intentionally does not replace the app automatically.
+DisplayHarbor checks the GitHub Releases API periodically. When a newer version is available, the menu bar panel shows a **New version** action that opens the matching release page. This free release intentionally does not replace the app automatically.
 
-To update, download the newer DMG from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), verify its checksum, quit DisplayHarbor, and either drag the new app to `/Applications` or use the advanced launcher in the mounted DMG to replace and launch it. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced. After Developer ID signing and notarization are available, a signed Sparkle 2 updater can be considered for a smoother in-app flow.
+To update, download the newer DMG from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), verify its checksum, quit DisplayHarbor, and drag the new app to `/Applications`. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced. A signed Sparkle 2 updater can be considered later for a smoother in-app flow.
 
 ## Run from source
 
@@ -75,15 +77,7 @@ zsh build-app.sh
 open dist/DisplayHarbor.app
 ```
 
-For local development, create a stable development signing identity once before rebuilding:
-
-```bash
-zsh setup-dev-signing.sh
-zsh build-app.sh
-open dist/DisplayHarbor.app
-```
-
-The development identity is local-only. GitHub Release artifacts are ad-hoc signed and are not notarized. On first launch of a downloaded release, Control-click the app and choose **Open** if macOS asks for confirmation.
+`build-app.sh` requires a locally installed Developer ID Application certificate and produces a hardened-runtime-signed app. The GitHub Release workflow additionally notarizes the release; if its signing or notarization Secrets are missing, it fails instead of publishing an unsigned or unnotarized release.
 
 ## Usage
 
@@ -93,6 +87,19 @@ The development identity is local-only. GitHub Release artifacts are ad-hoc sign
 4. Save the current layout for the active app.
 5. Open **Manage Setups & App Rules** to inspect rules and workspaces.
 6. Use **Apply Current Workspace** to open unopened apps and restore their saved windows.
+7. Add work apps to **Exit Apps when entering** below the selected workspace's saved App rules.
+
+### App-specific launch content
+
+Launch content is intentionally App-specific. In **Manage Setups & App Rules**, supported App rules show a launch-content icon:
+
+- **Chrome and compatible browsers** can be configured with URLs (`https://...`).
+- **Feishu** can be configured with official AppLinks (`feishu://...` or `https://applink.feishu.cn/...`) for chats, documents, calendar pages, and other supported destinations.
+- **Obsidian** can be configured with local files, such as `/Users/me/Notes/Today.md`.
+
+Other Apps do not show this configuration until a dedicated integration is added. Launch content runs when you explicitly choose **Open App**, **Open all**, or **Apply Current Workspace** for an unopened App; ordinary display-change restoration does not reopen content on every refresh. DisplayHarbor uses macOS Launch Services and does not execute shell commands or AppleScript.
+
+Exit rules request a normal quit from configured apps when switching into the workspace; they never force-terminate a process. If an app has unsaved content, macOS continues through that app's own save flow. An app cannot have both a saved layout rule and an exit rule in the same workspace.
 
 Rules are stored at:
 
@@ -116,6 +123,18 @@ The workflow builds, verifies, and uploads:
 - `DisplayHarbor-<version>-macos-arm64.dmg` (recommended installer)
 - `DisplayHarbor-<version>-macos-arm64.dmg.sha256`
 
+### GitHub Actions signing and notarization setup
+
+The Release workflow requires these repository Secrets under **Settings → Secrets and variables → Actions**:
+
+- `DISPLAYHARBOR_SIGNING_P12_BASE64`: base64 contents of a Developer ID Application `.p12` exported from Keychain Access.
+- `DISPLAYHARBOR_SIGNING_P12_PASSWORD`: password used when exporting the `.p12`.
+- `DISPLAYHARBOR_NOTARY_APPLE_ID`: Apple ID email for the Apple Developer Program membership.
+- `DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD`: app-specific password generated for that Apple ID, not the normal Apple ID password.
+- `DISPLAYHARBOR_NOTARY_TEAM_ID`: Apple Developer Team ID, for example `6ABLTPWC78`.
+
+Do not commit the private key, `.p12` password, or API key. The workflow imports the certificate into a temporary keychain on the GitHub runner, then signs, notarizes, staples, and checksums the release artifacts.
+
 ## Display setups and workspaces
 
 DisplayHarbor identifies a display setup from the connected physical displays, their arrangement, resolutions, and main-display relationship. Rules from one setup do not overwrite rules from another setup.
@@ -127,7 +146,7 @@ Each setup starts with a built-in **Default** workspace. You can create a new wo
 - Multi-window matching uses window title, saved size, and window order; a changed window ID alone does not prevent restoration.
 - Automatic restoration moves windows that already exist. It does not create missing windows.
 - DisplayHarbor does not actively switch macOS Spaces or create native full-screen Spaces.
-- The current release is arm64-only and uses ad-hoc signing without notarization.
+- The current release is arm64-only.
 
 ## License
 
