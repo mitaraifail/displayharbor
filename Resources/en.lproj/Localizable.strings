@@ -106,3 +106,10 @@
 "Switch" = "Switch";
 "The rules file was corrupted and backed up as %@" = "The rules file was corrupted and backed up as %@";
 "Check for updates" = "Check for updates";
+"Application management" = "Application management";
+"Language" = "Language";
+"Follow System" = "Follow System";
+"简体中文" = "简体中文";
+"English" = "English";
+"Updates" = "Updates";
+"Version" = "Version";

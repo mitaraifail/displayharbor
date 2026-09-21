@@ -6,6 +6,34 @@ import Sparkle
 import UniformTypeIdentifiers
 
 private enum L10n {
+    private static let languagePreferenceKey = "DisplayHarbor.language"
+
+    enum LanguagePreference: String {
+        case system
+        case chinese = "zh-Hans"
+        case english = "en"
+    }
+
+    static var languagePreference: LanguagePreference {
+        LanguagePreference(rawValue: UserDefaults.standard.string(forKey: languagePreferenceKey) ?? "") ?? .system
+    }
+
+    static func setLanguagePreference(_ preference: LanguagePreference) {
+        UserDefaults.standard.set(preference.rawValue, forKey: languagePreferenceKey)
+    }
+
+    private static var localization: String {
+        switch languagePreference {
+        case .system:
+            let language = Locale.preferredLanguages.first?.lowercased() ?? ""
+            return language.hasPrefix("zh") ? "zh-Hans" : "en"
+        case .chinese:
+            return "zh-Hans"
+        case .english:
+            return "en"
+        }
+    }
+
     private static let bundle: Bundle = {
         // Packaged App bundles keep their localizations in Bundle.main. The
         // source-run debug build resolves them from the project Resources folder.
@@ -24,8 +52,26 @@ private enum L10n {
         return Bundle(url: sourceResources) ?? .main
     }()
 
+    private static var localizedBundle: Bundle {
+        if Bundle.main.url(forResource: "en", withExtension: "lproj") != nil
+            || Bundle.main.url(forResource: "zh-Hans", withExtension: "lproj") != nil {
+            if let url = Bundle.main.url(forResource: localization, withExtension: "lproj"),
+               let bundle = Bundle(url: url) {
+                return bundle
+            }
+            return .main
+        }
+        let sourceResources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("(localization).lproj", isDirectory: true)
+        return Bundle(url: sourceResources) ?? bundle
+    }
+
     static func text(_ key: String, _ arguments: CVarArg...) -> String {
-        let format = NSLocalizedString(key, tableName: "Localizable", bundle: bundle, value: key, comment: "")
+        let format = NSLocalizedString(key, tableName: "Localizable", bundle: localizedBundle, value: key, comment: "")
         guard !arguments.isEmpty else { return format }
         return String(format: format, locale: Locale.current, arguments: arguments)
     }
@@ -1411,6 +1457,7 @@ final class PopoverViewController: NSViewController {
     private let store: RuleStore
     private let onChange: () -> Void
     private let onOpenManager: () -> Void
+    private let onOpenSettings: () -> Void
     private let onClosePopover: () -> Void
 
     private let statusLabel = NSTextField(labelWithString: "")
@@ -1433,6 +1480,7 @@ final class PopoverViewController: NSViewController {
         store: RuleStore,
         onChange: @escaping () -> Void,
         onOpenManager: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void,
         onClosePopover: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -1440,6 +1488,7 @@ final class PopoverViewController: NSViewController {
         self.store = store
         self.onChange = onChange
         self.onOpenManager = onOpenManager
+        self.onOpenSettings = onOpenSettings
         self.onClosePopover = onClosePopover
         super.init(nibName: nil, bundle: nil)
     }
@@ -1565,11 +1614,29 @@ final class PopoverViewController: NSViewController {
         brandLabel.setAccessibilityLabel("DisplayHarbor")
         brandLabel.translatesAutoresizingMaskIntoConstraints = false
         brandContainer.addSubview(brandLabel)
+
+        let settingsButton = NSButton(
+            image: NSImage(systemSymbolName: "gearshape", accessibilityDescription: L10n.text("Application management"))!,
+            target: self,
+            action: #selector(openSettings)
+        )
+        settingsButton.isBordered = false
+        settingsButton.bezelStyle = .texturedRounded
+        settingsButton.controlSize = .small
+        settingsButton.contentTintColor = .secondaryLabelColor
+        settingsButton.toolTip = L10n.text("Application management")
+        settingsButton.setAccessibilityLabel(L10n.text("Application management"))
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+        brandContainer.addSubview(settingsButton)
         NSLayoutConstraint.activate([
             brandContainer.heightAnchor.constraint(equalToConstant: 28),
             brandLabel.centerXAnchor.constraint(equalTo: brandContainer.centerXAnchor),
             brandLabel.widthAnchor.constraint(equalTo: brandContainer.widthAnchor),
-            brandLabel.centerYAnchor.constraint(equalTo: brandContainer.centerYAnchor)
+            brandLabel.centerYAnchor.constraint(equalTo: brandContainer.centerYAnchor),
+            settingsButton.trailingAnchor.constraint(equalTo: brandContainer.trailingAnchor),
+            settingsButton.centerYAnchor.constraint(equalTo: brandContainer.centerYAnchor),
+            settingsButton.widthAnchor.constraint(equalToConstant: 24),
+            settingsButton.heightAnchor.constraint(equalToConstant: 24)
         ])
 
         let bodyContent = NSStackView(views: [displayPreview, card])
@@ -1700,7 +1767,6 @@ final class PopoverViewController: NSViewController {
             addAppAction(permissionButton, fillsWidth: true)
             addManageAction()
             addScenarioActions()
-            addUpdateAction()
             addQuitAction()
             return
         }
@@ -1751,7 +1817,6 @@ final class PopoverViewController: NSViewController {
             addQuickEnvironmentAction(for: unopenedAppNames)
         }
         addScenarioActions()
-        addUpdateAction()
         addQuitAction()
     }
 
@@ -1808,20 +1873,6 @@ final class PopoverViewController: NSViewController {
         makeTextButton(switchButton)
         footerStack.addArrangedSubview(footerSpacer())
         footerStack.addArrangedSubview(switchButton)
-    }
-
-    private func addUpdateAction() {
-        let update = button(updateTitle(), action: #selector(checkForUpdates))
-        update.bezelStyle = .inline
-        update.contentTintColor = .secondaryLabelColor
-        update.font = .systemFont(ofSize: 11)
-        makeTextButton(update)
-        footerStack.addArrangedSubview(footerSpacer())
-        footerStack.addArrangedSubview(update)
-    }
-
-    private func updateTitle() -> String {
-        return L10n.text("Check for updates")
     }
 
     private func footerSpacer() -> NSView {
@@ -2071,10 +2122,6 @@ final class PopoverViewController: NSViewController {
         NSWorkspace.shared.open(url)
     }
 
-    @objc private func checkForUpdates() {
-        UpdateChecker.shared.checkForUpdates()
-    }
-
     @objc private func quitApp() {
         NSApp.terminate(nil)
     }
@@ -2085,6 +2132,11 @@ final class PopoverViewController: NSViewController {
         DispatchQueue.main.async {
             openManager()
         }
+    }
+
+    @objc private func openSettings() {
+        onClosePopover()
+        onOpenSettings()
     }
 }
 
@@ -3234,11 +3286,150 @@ final class EnvironmentManagerWindowController: NSWindowController {
 }
 
 @MainActor
+final class AppSettingsViewController: NSViewController {
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let languageTitleLabel = NSTextField(labelWithString: "")
+    private let updateTitleLabel = NSTextField(labelWithString: "")
+    private let checkButton = NSButton()
+    private let versionTitleLabel = NSTextField(labelWithString: "")
+    private let versionLabel = NSTextField(labelWithString: "")
+    private let languagePopup = NSPopUpButton()
+
+    override func loadView() {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 240))
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.textColor = .labelColor
+
+        languageTitleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        languageTitleLabel.textColor = .labelColor
+
+        updateTitleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        updateTitleLabel.textColor = .labelColor
+
+        checkButton.target = self
+        checkButton.action = #selector(checkForUpdates)
+        checkButton.bezelStyle = .rounded
+        checkButton.controlSize = .regular
+
+        versionTitleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        versionTitleLabel.textColor = .labelColor
+        versionLabel.stringValue = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        versionLabel.font = .systemFont(ofSize: 13)
+        versionLabel.textColor = .secondaryLabelColor
+
+        languagePopup.target = self
+        languagePopup.action = #selector(languageChanged(_:))
+        languagePopup.widthAnchor.constraint(equalToConstant: 150).isActive = true
+
+        let languageRow = NSStackView(views: [languageTitleLabel, languagePopup])
+        languageRow.orientation = .horizontal
+        languageRow.alignment = .centerY
+        languageRow.spacing = 12
+
+        let updateRow = NSStackView(views: [updateTitleLabel, checkButton])
+        updateRow.orientation = .horizontal
+        updateRow.alignment = .firstBaseline
+        updateRow.spacing = 10
+        updateTitleLabel.setContentHuggingPriority(.required, for: .horizontal)
+        updateTitleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let versionRow = NSStackView(views: [versionTitleLabel, versionLabel])
+        versionRow.orientation = .horizontal
+        versionRow.alignment = .firstBaseline
+        versionRow.spacing = 10
+        versionTitleLabel.setContentHuggingPriority(.required, for: .horizontal)
+        versionTitleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let content = NSStackView(views: [titleLabel, languageRow, updateRow, versionRow])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 12
+        content.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(content)
+
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
+            content.topAnchor.constraint(equalTo: root.topAnchor, constant: 28),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -28),
+            updateRow.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            checkButton.widthAnchor.constraint(equalToConstant: 112)
+        ])
+        view = root
+        refreshLocalizedText()
+    }
+
+    @objc private func checkForUpdates() {
+        UpdateChecker.shared.checkForUpdates()
+    }
+
+    @objc private func languageChanged(_ sender: NSPopUpButton) {
+        let preference: L10n.LanguagePreference
+        switch sender.indexOfSelectedItem {
+        case 1:
+            preference = .chinese
+        case 2:
+            preference = .english
+        default:
+            preference = .system
+        }
+        L10n.setLanguagePreference(preference)
+        refreshLocalizedText()
+    }
+
+    private func refreshLocalizedText() {
+        titleLabel.stringValue = L10n.text("Application management")
+        languageTitleLabel.stringValue = L10n.text("Language")
+        updateTitleLabel.stringValue = L10n.text("Updates")
+        checkButton.title = L10n.text("Check for updates")
+        versionTitleLabel.stringValue = L10n.text("Version")
+        languagePopup.removeAllItems()
+        languagePopup.addItems(withTitles: [
+            L10n.text("Follow System"),
+            L10n.text("简体中文"),
+            L10n.text("English")
+        ])
+        languagePopup.selectItem(at: languagePopupIndex())
+        view.window?.title = L10n.text("Application management")
+    }
+
+    private func languagePopupIndex() -> Int {
+        switch L10n.languagePreference {
+        case .system:
+            return 0
+        case .chinese:
+            return 1
+        case .english:
+            return 2
+        }
+    }
+}
+
+@MainActor
+final class AppSettingsWindowController: NSWindowController {
+    init() {
+        let window = NSWindow(contentViewController: AppSettingsViewController())
+        window.title = L10n.text("Application management")
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.setContentSize(NSSize(width: 620, height: 240))
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: RuleStore!
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var environmentWindowController: EnvironmentManagerWindowController?
+    private var settingsWindowController: AppSettingsWindowController?
     private var lastExternalApplication: NSRunningApplication?
     private var environmentChangeWorkItem: DispatchWorkItem?
     private var statusResetWorkItem: DispatchWorkItem?
@@ -3285,6 +3476,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onOpenManager: { [weak self] in
                 self?.openEnvironmentManager()
+            },
+            onOpenSettings: { [weak self] in
+                self?.openSettings()
             },
             onClosePopover: { [weak self] in
                 self?.closePopover()
@@ -3372,6 +3566,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.showWindow(nil)
             bringManagerWindowToFront(controller)
         }
+    }
+
+    private func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let controller = settingsWindowController {
+            controller.showWindow(nil)
+            bringSettingsWindowToFront(controller)
+            return
+        }
+        let controller = AppSettingsWindowController()
+        settingsWindowController = controller
+        controller.showWindow(nil)
+        bringSettingsWindowToFront(controller)
+    }
+
+    private func bringSettingsWindowToFront(_ controller: AppSettingsWindowController) {
+        guard let window = controller.window else { return }
+        window.collectionBehavior.formUnion([.moveToActiveSpace, .fullScreenAuxiliary])
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func bringManagerWindowToFront(_ controller: EnvironmentManagerWindowController) {

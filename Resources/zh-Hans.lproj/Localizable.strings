@@ -98,7 +98,7 @@
 "Delete" = "删除";
 "Includes Dedicated Space" = "含独占桌面";
 "Layout" = "布局";
-"Manage Setups & App Rules" = "管理环境与 App 规则";
+"Manage Setups & App Rules" = "管理环境与规则";
 "Quit" = "退出";
 "Rules" = "规则";
 "Save failed" = "保存失败";
@@ -106,3 +106,10 @@
 "Switch" = "切换";
 "The rules file was corrupted and backed up as %@" = "规则文件损坏，已备份为 %@";
 "Check for updates" = "检查更新";
+"Application management" = "应用管理";
+"Language" = "语言";
+"Follow System" = "跟随系统";
+"简体中文" = "简体中文";
+"English" = "英文";
+"Updates" = "更新";
+"Version" = "版本";
