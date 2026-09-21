@@ -1091,6 +1091,18 @@ final class HoverFeedbackButton: NSButton {
 
 @MainActor
 enum WindowProbe {
+    static func isDesktopOnlyFinder(_ app: NSRunningApplication) -> Bool {
+        guard app.bundleIdentifier == "com.apple.finder" else { return false }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        guard let value = attribute(axApp, kAXWindowsAttribute),
+              let windows = value as? [AXUIElement] else {
+            return false
+        }
+        let standardWindows = windows.filter(isStandardWindow)
+        guard !standardWindows.isEmpty else { return false }
+        return standardWindows.allSatisfy(isFinderDesktopWindow)
+    }
+
     static func snapshot(for app: NSRunningApplication) -> WindowSnapshot? {
         guard let bundleID = app.bundleIdentifier,
               let window = firstWindow(for: app),
@@ -1241,6 +1253,18 @@ enum WindowProbe {
         let role = stringAttribute(window, kAXRoleAttribute)
         let subrole = stringAttribute(window, kAXSubroleAttribute)
         return role == kAXWindowRole && subrole == kAXStandardWindowSubrole
+    }
+
+    private static func isFinderDesktopWindow(_ window: AXUIElement) -> Bool {
+        let title = stringAttribute(window, kAXTitleAttribute)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isDesktopTitle = title == nil || title?.isEmpty == true || title == "Desktop" || title == "桌面"
+        guard isDesktopTitle,
+              let frame = frame(of: window),
+              let screen = DisplayInfo.screen(containing: frame) else {
+            return false
+        }
+        return frame.width >= screen.frame.width * 0.95
+            && frame.height >= screen.frame.height * 0.95
     }
 
     private struct WindowMatch {
@@ -1455,6 +1479,7 @@ final class PopoverViewController: NSViewController {
     private var snapshot: WindowSnapshot?
     private var snapshots: [WindowSnapshot]
     private let store: RuleStore
+    private let hasTargetApplication: Bool
     private let onChange: () -> Void
     private let onOpenManager: () -> Void
     private let onOpenSettings: () -> Void
@@ -1478,6 +1503,7 @@ final class PopoverViewController: NSViewController {
         snapshot: WindowSnapshot?,
         snapshots: [WindowSnapshot],
         store: RuleStore,
+        hasTargetApplication: Bool,
         onChange: @escaping () -> Void,
         onOpenManager: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
@@ -1486,6 +1512,7 @@ final class PopoverViewController: NSViewController {
         self.snapshot = snapshot
         self.snapshots = snapshots
         self.store = store
+        self.hasTargetApplication = hasTargetApplication
         self.onChange = onChange
         self.onOpenManager = onOpenManager
         self.onOpenSettings = onOpenSettings
@@ -1760,11 +1787,13 @@ final class PopoverViewController: NSViewController {
             sizeValue.stringValue = "—"
             layoutValue.stringValue = "—"
             ruleValue.stringValue = L10n.text("No standard window recognized")
-            notice.stringValue = AXIsProcessTrusted()
-                ? L10n.text("Activate an App with a standard window, then open DisplayHarbor.")
-                : L10n.text("Accessibility permission is required for DisplayHarbor to read and move windows.")
-            let permissionButton = button(L10n.text("Open Accessibility Settings"), action: #selector(openAccessibility))
-            addAppAction(permissionButton, fillsWidth: true)
+            if hasTargetApplication && !AXIsProcessTrusted() {
+                notice.stringValue = L10n.text("Accessibility permission is required for DisplayHarbor to read and move windows.")
+                let permissionButton = button(L10n.text("Open Accessibility Settings"), action: #selector(openAccessibility))
+                addAppAction(permissionButton, fillsWidth: true)
+            } else {
+                notice.stringValue = L10n.text("Activate an App with a standard window, then open DisplayHarbor.")
+            }
             addManageAction()
             addScenarioActions()
             addQuitAction()
@@ -3481,6 +3510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot: snapshot,
             snapshots: snapshots,
             store: store,
+            hasTargetApplication: app != nil,
             onChange: { [weak self] in
                 self?.refreshStatusItem()
             },
@@ -3500,7 +3530,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: statusItem.button?.bounds ?? .zero, of: statusItem.button ?? NSView(), preferredEdge: .minY)
         focusPopover()
 
-        guard !AXIsProcessTrusted() else { return }
+        guard app != nil, !AXIsProcessTrusted() else { return }
         startAccessibilityRefresh()
         guard !didPromptForAccessibilityThisLaunch else { return }
         didPromptForAccessibilityThisLaunch = true
@@ -3512,7 +3542,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func externalApplication() -> NSRunningApplication? {
         let frontmost = NSWorkspace.shared.frontmostApplication
-        return frontmost?.bundleIdentifier == Bundle.main.bundleIdentifier ? lastExternalApplication : frontmost
+        let candidate = frontmost?.bundleIdentifier == Bundle.main.bundleIdentifier ? lastExternalApplication : frontmost
+        guard let candidate, !WindowProbe.isDesktopOnlyFinder(candidate) else { return nil }
+        return candidate
     }
 
     private func startAccessibilityRefresh() {
