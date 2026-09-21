@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish macOS release
+    runs-on: macos-15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Import Developer ID signing certificate
+        env:
+          DISPLAYHARBOR_SIGNING_P12_BASE64: ${{ secrets.DISPLAYHARBOR_SIGNING_P12_BASE64 }}
+          DISPLAYHARBOR_SIGNING_P12_PASSWORD: ${{ secrets.DISPLAYHARBOR_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain_path="$RUNNER_TEMP/displayharbor-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          certificate_path="$RUNNER_TEMP/displayharbor-developer-id.p12"
+          intermediate_path="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -s "$keychain_path"
+
+          printf '%s' "$DISPLAYHARBOR_SIGNING_P12_BASE64" | base64 --decode > "$certificate_path"
+          curl --fail --location --silent --show-error \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            --output "$intermediate_path"
+
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$DISPLAYHARBOR_SIGNING_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security import "$intermediate_path" \
+            -k "$keychain_path" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain_path"
+
+          signing_identity="$(security find-identity -v -p codesigning "$keychain_path" \
+            | sed -n 's/.*\"\(Developer ID Application:.*\)\"/\1/p' \
+            | head -n 1)"
+          test -n "$signing_identity"
+          echo "DISPLAYHARBOR_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+
+      - name: Build app bundle
+        env:
+          DISPLAYHARBOR_VERSION: ${{ github.ref_name }}
+        run: zsh build-app.sh
+
+      - name: Verify app bundle
+        run: |
+          test -d dist/DisplayHarbor.app
+          test -f dist/DisplayHarbor.app/Contents/Resources/AppIcon.icns
+          test -f dist/DisplayHarbor.app/Contents/Resources/en.lproj/Localizable.strings
+          test -f dist/DisplayHarbor.app/Contents/Resources/zh-Hans.lproj/Localizable.strings
+          codesign --verify --deep --strict dist/DisplayHarbor.app
+
+      - name: Package arm64 app
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          archive="dist/DisplayHarbor-${RELEASE_TAG}-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/DisplayHarbor.app "$archive"
+          (cd "$(dirname "$archive")" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
+
+      - name: Generate Sparkle appcast
+        env:
+          DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          updates_dir="$RUNNER_TEMP/displayharbor-sparkle-updates"
+          sparkle_bin=".build/artifacts/sparkle/Sparkle/bin"
+          archive="dist/DisplayHarbor-${GITHUB_REF_NAME}-macos-arm64.zip"
+          mkdir -p "$updates_dir"
+          cp "$archive" "$updates_dir/"
+          test -x "$sparkle_bin/generate_appcast"
+          printf '%s' "$DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY" \
+            | "$sparkle_bin/generate_appcast" --ed-key-file - "$updates_dir"
+          test -f "$updates_dir/appcast.xml"
+          cp "$updates_dir/appcast.xml" dist/appcast.xml
+
+      - name: Package DMG
+        env:
+          DISPLAYHARBOR_VERSION: ${{ github.ref_name }}
+        run: zsh package-dmg.sh
+
+      - name: Notarize DMG
+        env:
+          DISPLAYHARBOR_NOTARY_APPLE_ID: ${{ secrets.DISPLAYHARBOR_NOTARY_APPLE_ID }}
+          DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD: ${{ secrets.DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD }}
+          DISPLAYHARBOR_NOTARY_TEAM_ID: ${{ secrets.DISPLAYHARBOR_NOTARY_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dmg_path="dist/DisplayHarbor-${GITHUB_REF_NAME}-macos-arm64.dmg"
+
+          xcrun notarytool submit "$dmg_path" \
+            --apple-id "$DISPLAYHARBOR_NOTARY_APPLE_ID" \
+            --password "$DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD" \
+            --team-id "$DISPLAYHARBOR_NOTARY_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          (cd dist && shasum -a 256 "$(basename "$dmg_path")" > "$(basename "$dmg_path").sha256")
+
+      - name: Verify notarized release
+        run: |
+          set -euo pipefail
+          dmg_path="dist/DisplayHarbor-${GITHUB_REF_NAME}-macos-arm64.dmg"
+          mount_point="$RUNNER_TEMP/displayharbor-dmg"
+          mkdir -p "$mount_point"
+          cleanup() {
+            hdiutil detach "$mount_point" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_point" "$dmg_path" >/dev/null
+          spctl --assess --type execute --verbose=4 "$mount_point/DisplayHarbor.app"
+          codesign --verify --deep --strict "$mount_point/DisplayHarbor.app"
+          (cd dist && shasum -a 256 -c "$(basename "$dmg_path").sha256")
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DisplayHarbor ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip.sha256
+            dist/appcast.xml
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.dmg
+            dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.dmg.sha256
