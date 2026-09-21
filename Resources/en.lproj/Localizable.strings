@@ -55,6 +55,8 @@
 "Restore %ld windows" = "Restore %ld windows";
 "Update current layout" = "Update current layout";
 "Apply current workspace" = "Apply current workspace";
+"Apply current workspace help" = "Open: %@\nExit: %@";
+"None" = "None";
 "Open unlaunched Apps and restore their windows using the current workspace.\nNot open: %@" = "Open unlaunched Apps and restore their windows using the current workspace.\nNot open: %@";
 "Switch workspace" = "Switch workspace";
 "After switching, the next workspace application or matching App launch will use the new layout." = "After switching, the next workspace application or matching App launch will use the new layout.";

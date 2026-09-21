@@ -58,6 +58,8 @@
 "Restore %ld windows" = "恢复 %ld 个窗口";
 "Update current layout" = "更新当前布局";
 "Apply current workspace" = "应用当前情景";
+"Apply current workspace help" = "应打开：%@\n应退出：%@";
+"None" = "无";
 "Open unlaunched Apps and restore their windows using the current workspace.\nNot open: %@" = "打开未运行的 App，并按当前情景恢复窗口。\n未打开：%@";
 "Switch workspace" = "切换情景";
 "After switching, the next workspace application or matching App launch will use the new layout." = "切换后，下一次应用情景或启动匹配的 App 时会使用新布局。";

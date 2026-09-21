@@ -1777,6 +1777,10 @@ final class PopoverViewController: NSViewController {
         let unopenedAppNames = unopenedBundleIDs.map { bundleID in
             store.rules(for: bundleID).first?.appName ?? bundleID
         }
+        let exitApps = store.exitApps(inEnvironment: store.currentEnvironment.key, scenarioID: store.currentScenarioID)
+        let stillRunningExitAppNames = exitApps.compactMap { bundleID, appName in
+            isAppRunning(bundleID: bundleID) ? appName : nil
+        }.sorted()
         let layoutIsCurrent = !existingRules.isEmpty
             && WindowProbe.layoutMatches(snapshots: snapshots, rules: existingRules)
         statusLabel.stringValue = existingRules.isEmpty
@@ -1813,8 +1817,8 @@ final class PopoverViewController: NSViewController {
             addAppAction(delete)
         }
         addManageAction()
-        if !unopenedAppNames.isEmpty {
-            addQuickEnvironmentAction(for: unopenedAppNames)
+        if !unopenedAppNames.isEmpty || !stillRunningExitAppNames.isEmpty {
+            addQuickEnvironmentAction(for: unopenedAppNames, exitAppNames: stillRunningExitAppNames)
         }
         addScenarioActions()
         addQuitAction()
@@ -1849,19 +1853,23 @@ final class PopoverViewController: NSViewController {
         footerStack.addArrangedSubview(manage)
     }
 
-    private func addQuickEnvironmentAction(for appNames: [String]) {
-        footerStack.addArrangedSubview(footerSpacer())
+    private func addQuickEnvironmentAction(for appNames: [String], exitAppNames: [String]) {
         let quick = button(L10n.text("Apply current workspace"), action: #selector(openAllCurrentEnvironmentApps))
         quick.bezelStyle = .inline
         quick.contentTintColor = .secondaryLabelColor
         quick.font = .systemFont(ofSize: 11)
-        let quickHelp = L10n.text("Open unlaunched Apps and restore their windows using the current workspace.\nNot open: %@", appNames.joined(separator: L10n.listSeparator))
+        let appsToOpen = appNames.isEmpty ? L10n.text("None") : appNames.joined(separator: L10n.listSeparator)
+        let appsToExit = exitAppNames.isEmpty ? L10n.text("None") : exitAppNames.joined(separator: L10n.listSeparator)
+        let quickHelp = L10n.text(
+            "Apply current workspace help",
+            appsToOpen,
+            appsToExit
+        )
         quick.onHoverChanged = { [weak self, weak quick] isHovering in
             self?.updateQuickHelp(isHovering ? quick : nil, text: quickHelp)
         }
         makeTextButton(quick)
         footerStack.addArrangedSubview(quick)
-        footerStack.addArrangedSubview(footerSpacer())
     }
 
     private func addScenarioActions() {
@@ -1871,7 +1879,6 @@ final class PopoverViewController: NSViewController {
         switchButton.contentTintColor = .secondaryLabelColor
         switchButton.font = .systemFont(ofSize: 11)
         makeTextButton(switchButton)
-        footerStack.addArrangedSubview(footerSpacer())
         footerStack.addArrangedSubview(switchButton)
     }
 
@@ -2022,16 +2029,20 @@ final class PopoverViewController: NSViewController {
     }
 
     private func isAppRunning(bundleID: String) -> Bool {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+        NSWorkspace.shared.runningApplications.contains(where: {
             $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
-        }) else { return false }
-        return WindowProbe.hasVisibleWindow(for: app)
+        })
     }
 
     @objc private func openAllCurrentEnvironmentApps() {
         updateQuickHelp(nil)
         let bundleIDs = store.allBundleIDs
-        guard !bundleIDs.isEmpty else { return }
+        let exitApps = store.exitApps(inEnvironment: store.currentEnvironment.key, scenarioID: store.currentScenarioID)
+        _ = requestExitApps(exitApps)
+        guard !bundleIDs.isEmpty else {
+            render()
+            return
+        }
 
         onClosePopover()
         for (index, bundleID) in bundleIDs.enumerated() {
@@ -2931,10 +2942,9 @@ final class EnvironmentManagerViewController: NSViewController {
     }
 
     private func isAppRunning(bundleID: String) -> Bool {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+        NSWorkspace.shared.runningApplications.contains(where: {
             $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
-        }) else { return false }
-        return WindowProbe.hasVisibleWindow(for: app)
+        })
     }
 
     @objc private func openRuleApp(_ sender: NSButton) {
