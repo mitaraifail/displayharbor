@@ -43,7 +43,7 @@ For normal use, download the latest arm64 **DMG** from the [GitHub Releases page
    ```
 
 3. Open the DMG and drag `DisplayHarbor.app` to the `Applications` shortcut.
-4. GitHub Releases are built with a Developer ID signature and submitted to Apple for notarization by Actions. A normally configured release should not require bypassing the “unknown developer” warning; you still need to grant DisplayHarbor access under **System Settings → Privacy & Security → Accessibility**.
+4. GitHub Releases are built with a Developer ID signature and submitted to Apple for notarization by Actions. After launching DisplayHarbor, grant it access under **System Settings → Privacy & Security → Accessibility**.
 5. The mounted DMG also contains `README.txt`; launch DisplayHarbor from `/Applications` after installation.
 
 ZIP fallback:

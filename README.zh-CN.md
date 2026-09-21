@@ -43,7 +43,7 @@ DisplayHarbor 是一个原生 macOS 菜单栏工具，用来记住每个 App 窗
    ```
 
 3. 打开 DMG，将 `DisplayHarbor.app` 拖到“应用程序”快捷方式。
-4. GitHub Release 会由 Actions 使用 Developer ID 签名并提交 Apple 公证。正常情况下首次打开不需要绕过“未知开发者”提示；仍需在“系统设置 → 隐私与安全性 → 辅助功能”中授权 DisplayHarbor。
+4. GitHub Release 会由 Actions 使用 Developer ID 签名并提交 Apple 公证。首次启动后，请在“系统设置 → 隐私与安全性 → 辅助功能”中授权 DisplayHarbor。
 5. 挂载后的 DMG 里还包含 `README.txt`；安装完成后从“应用程序”启动 DisplayHarbor。
 
 ZIP 备用方式：
