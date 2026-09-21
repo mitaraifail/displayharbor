@@ -79,49 +79,6 @@ struct PlacementRule: Codable {
     }
 }
 
-struct LaunchAction: Codable, Equatable {
-    enum Kind: String, Codable {
-        case url
-        case file
-    }
-
-    let kind: Kind
-    let value: String
-}
-
-private enum LaunchContentKind {
-    case browserURLs
-    case obsidianFiles
-    case feishuLinks
-
-    var actionKind: LaunchAction.Kind {
-        switch self {
-        case .browserURLs, .feishuLinks: return .url
-        case .obsidianFiles: return .file
-        }
-    }
-}
-
-private func launchContentKind(for bundleID: String) -> LaunchContentKind? {
-    switch bundleID {
-    case "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary", "com.google.Chrome.dev",
-         "org.chromium.Chromium", "company.thebrowser.Browser", "com.apple.Safari", "org.mozilla.firefox",
-         "com.brave.Browser", "com.microsoft.edgemac", "com.kagi.kagimacOS":
-        return .browserURLs
-    case "md.obsidian":
-        return .obsidianFiles
-    case "com.electron.lark":
-        return .feishuLinks
-    default:
-        return nil
-    }
-}
-
-private func supportedLaunchActions(_ actions: [LaunchAction], for bundleID: String) -> [LaunchAction] {
-    guard let kind = launchContentKind(for: bundleID) else { return [] }
-    return actions.filter { $0.kind == kind.actionKind }
-}
-
 @MainActor
 private func requestExitApps(_ exitApps: [String: String]) -> [String] {
     var failedNames: [String] = []
@@ -134,32 +91,6 @@ private func requestExitApps(_ exitApps: [String: String]) -> [String] {
         }
     }
     return failedNames
-}
-
-@MainActor
-private func performLaunchActions(_ actions: [LaunchAction], in applicationURL: URL? = nil) {
-    for action in actions {
-        let url: URL?
-        switch action.kind {
-        case .url:
-            url = URL(string: action.value)
-        case .file:
-            url = URL(fileURLWithPath: action.value)
-        }
-        guard let url else { continue }
-        if let applicationURL {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = false
-            NSWorkspace.shared.open(
-                [url],
-                withApplicationAt: applicationURL,
-                configuration: configuration,
-                completionHandler: nil
-            )
-        } else {
-            NSWorkspace.shared.open(url)
-        }
-    }
 }
 
 struct DisplayDescriptor: Codable, Hashable {
@@ -180,26 +111,23 @@ struct StoredScenario: Codable {
     let id: String
     var name: String
     var rules: [String: [PlacementRule]]
-    var launchActions: [String: [LaunchAction]]
     var exitApps: [String: String]
     var isSystemDefault: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, name, rules, launchActions, exitApps, isSystemDefault
+        case id, name, rules, exitApps, isSystemDefault
     }
 
     init(
         id: String,
         name: String,
         rules: [String: [PlacementRule]],
-        launchActions: [String: [LaunchAction]] = [:],
         exitApps: [String: String] = [:],
         isSystemDefault: Bool = false
     ) {
         self.id = id
         self.name = name
         self.rules = rules
-        self.launchActions = launchActions
         self.exitApps = exitApps
         self.isSystemDefault = isSystemDefault
     }
@@ -209,7 +137,6 @@ struct StoredScenario: Codable {
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         rules = try container.decode([String: [PlacementRule]].self, forKey: .rules)
-        launchActions = try container.decodeIfPresent([String: [LaunchAction]].self, forKey: .launchActions) ?? [:]
         exitApps = try container.decodeIfPresent([String: String].self, forKey: .exitApps) ?? [:]
         isSystemDefault = try container.decodeIfPresent(Bool.self, forKey: .isSystemDefault)
             ?? (id == "default" && (name == "默认" || name == "Default"))
@@ -289,7 +216,7 @@ final class RuleStore {
 
     var allBundleIDs: [String] {
         guard let scenario = currentScenario else { return [] }
-        return Array(Set(scenario.rules.keys).union(scenario.launchActions.keys))
+        return Array(scenario.rules.keys)
     }
 
     func rules(for bundleID: String) -> [PlacementRule] {
@@ -300,16 +227,6 @@ final class RuleStore {
         guard let environment = environments[key] else { return [] }
         let id = scenarioID ?? environment.activeScenarioID
         return id.flatMap { environment.scenarios[$0]?.rules[bundleID] } ?? []
-    }
-
-    func launchActions(for bundleID: String) -> [LaunchAction] {
-        currentScenario?.launchActions[bundleID] ?? []
-    }
-
-    func launchActions(for bundleID: String, inEnvironment key: String, scenarioID: String? = nil) -> [LaunchAction] {
-        guard let environment = environments[key] else { return [] }
-        let id = scenarioID ?? environment.activeScenarioID
-        return id.flatMap { environment.scenarios[$0]?.launchActions[bundleID] } ?? []
     }
 
     func exitApps(inEnvironment key: String, scenarioID: String? = nil) -> [String: String] {
@@ -370,30 +287,6 @@ final class RuleStore {
     }
 
     @discardableResult
-    func setLaunchActions(
-        _ actions: [LaunchAction],
-        for bundleID: String,
-        inEnvironment key: String,
-        scenarioID: String
-    ) -> Bool {
-        guard var environment = environments[key],
-              var scenario = environment.scenarios[scenarioID] else { return false }
-        let previous = environment
-        if actions.isEmpty {
-            scenario.launchActions.removeValue(forKey: bundleID)
-        } else {
-            scenario.launchActions[bundleID] = actions
-        }
-        environment.scenarios[scenarioID] = scenario
-        environments[key] = environment
-        guard persist() else {
-            environments[key] = previous
-            return false
-        }
-        return true
-    }
-
-    @discardableResult
     func addExitApps(
         _ apps: [String: String],
         inEnvironment key: String,
@@ -438,7 +331,6 @@ final class RuleStore {
         let previous = environments[currentEnvironment.key]
         guard let scenarioID = environments[currentEnvironment.key]?.activeScenarioID else { return false }
         environments[currentEnvironment.key]?.scenarios[scenarioID]?.rules.removeValue(forKey: bundleID)
-        environments[currentEnvironment.key]?.scenarios[scenarioID]?.launchActions.removeValue(forKey: bundleID)
         guard persist() else {
             environments[currentEnvironment.key] = previous
             return false
@@ -489,7 +381,6 @@ final class RuleStore {
         guard let activeID = environments[key]?.activeScenarioID else { return false }
         let targetID = scenarioID ?? activeID
         environments[key]?.scenarios[targetID]?.rules.removeValue(forKey: bundleID)
-        environments[key]?.scenarios[targetID]?.launchActions.removeValue(forKey: bundleID)
         guard persist() else {
             environments[key] = previous
             return false
@@ -524,7 +415,6 @@ final class RuleStore {
             id: UUID().uuidString,
             name: trimmed.isEmpty ? L10n.text("New workspace") : trimmed,
             rules: source?.rules ?? [:],
-            launchActions: source?.launchActions ?? [:],
             exitApps: source?.exitApps ?? [:]
         )
         let previous = environment
@@ -2244,21 +2134,12 @@ final class PopoverViewController: NSViewController {
     private func launchAndRestore(bundleID: String) {
         let rules = store.rules(for: bundleID)
         guard !rules.isEmpty else { return }
-        let actions = supportedLaunchActions(store.launchActions(for: bundleID), for: bundleID)
 
         if let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
         }) {
             app.activate(options: [.activateAllWindows])
-            if actions.isEmpty {
-                _ = WindowProbe.restore(app: app, using: rules)
-            } else {
-                performLaunchActions(actions, in: app.bundleURL)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    app.activate(options: [.activateAllWindows])
-                    _ = WindowProbe.restore(app: app, using: rules)
-                }
-            }
+            _ = WindowProbe.restore(app: app, using: rules)
             return
         }
 
@@ -2267,15 +2148,10 @@ final class PopoverViewController: NSViewController {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, _ in
-            guard !actions.isEmpty else { return }
+            guard let app else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                performLaunchActions(actions, in: app?.bundleURL ?? url)
-                if let app {
-                    app.activate(options: [.activateAllWindows])
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        _ = WindowProbe.restore(app: app, using: rules)
-                    }
-                }
+                app.activate(options: [.activateAllWindows])
+                _ = WindowProbe.restore(app: app, using: rules)
             }
         }
     }
@@ -2766,7 +2642,6 @@ final class EnvironmentManagerViewController: NSViewController {
                     bundleID: bundleID,
                     appName: firstRule.appName,
                     placementRules: placementRules,
-                    launchActions: selectedScenario?.launchActions[bundleID] ?? [],
                     allowsAppLaunch: environmentIsActive,
                     onHover: { isHovering in
                         displayPreview.highlight(isHovering ? placementRules : [])
@@ -2944,7 +2819,6 @@ final class EnvironmentManagerViewController: NSViewController {
         bundleID: String,
         appName: String,
         placementRules: [PlacementRule],
-        launchActions: [LaunchAction],
         allowsAppLaunch: Bool,
         onHover: @escaping (Bool) -> Void
     ) -> NSView {
@@ -2956,26 +2830,12 @@ final class EnvironmentManagerViewController: NSViewController {
         let displayNames = Array(Set(placementRules.map { store.displayLabel(for: $0, inEnvironment: environmentKey) })).sorted().joined(separator: L10n.listSeparator)
         let fullScreenCount = placementRules.filter { $0.isFullScreen == true }.count
         let appIsOpen = isAppRunning(bundleID: bundleID)
-        let contentKind = launchContentKind(for: bundleID)
-        let configuredLaunchActions = supportedLaunchActions(launchActions, for: bundleID)
         var detailParts = [L10n.text("%ld windows", placementRules.count), displayNames]
         if !appIsOpen {
             detailParts.append(L10n.text("Unopened"))
         }
         if fullScreenCount > 0 {
             detailParts.append(fullScreenCount == placementRules.count ? L10n.text("Dedicated Space") : L10n.text("Includes Dedicated Space"))
-        }
-        if !configuredLaunchActions.isEmpty, let contentKind {
-            let key: String
-            switch contentKind {
-            case .browserURLs:
-                key = "%ld startup URLs"
-            case .obsidianFiles:
-                key = "%ld startup files"
-            case .feishuLinks:
-                key = "%ld startup Feishu links"
-            }
-            detailParts.append(L10n.text(key, configuredLaunchActions.count))
         }
         let detailViews = detailParts.enumerated().reduce(into: [NSView]()) { views, item in
             let (index, part) = item
@@ -3015,29 +2875,6 @@ final class EnvironmentManagerViewController: NSViewController {
             open = nil
         }
 
-        let configure: HoverFeedbackButton?
-        if let contentKind {
-            let title: String
-            switch contentKind {
-            case .browserURLs:
-                title = L10n.text("Configure startup URLs")
-            case .obsidianFiles:
-                title = L10n.text("Configure startup files")
-            case .feishuLinks:
-                title = L10n.text("Configure Feishu links")
-            }
-            let button = iconButton(
-                title: title,
-                symbolName: "arrow.up.forward.app",
-                action: #selector(configureLaunchActions(_:)),
-                hoverTint: .controlAccentColor
-            )
-            button.identifier = NSUserInterfaceItemIdentifier("\(environmentKey)\n\(scenarioID)\n\(bundleID)")
-            configure = button
-        } else {
-            configure = nil
-        }
-
         let delete = HoverFeedbackButton(title: L10n.text("Delete rule"), target: self, action: #selector(deleteRule(_:)))
         delete.controlSize = .small
         delete.setNormalTintColor(.secondaryLabelColor)
@@ -3048,10 +2885,6 @@ final class EnvironmentManagerViewController: NSViewController {
         labels.translatesAutoresizingMaskIntoConstraints = false
         delete.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(labels)
-        if let configure {
-            configure.translatesAutoresizingMaskIntoConstraints = false
-            row.addSubview(configure)
-        }
         row.addSubview(delete)
         if let open {
             open.translatesAutoresizingMaskIntoConstraints = false
@@ -3087,20 +2920,12 @@ final class EnvironmentManagerViewController: NSViewController {
             delete.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             delete.trailingAnchor.constraint(equalTo: row.trailingAnchor)
         ])
-        if let configure {
-            NSLayoutConstraint.activate([
-                configure.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-                configure.trailingAnchor.constraint(equalTo: delete.leadingAnchor, constant: -12)
-            ])
-        }
         if let open {
             NSLayoutConstraint.activate([
                 labels.trailingAnchor.constraint(lessThanOrEqualTo: open.leadingAnchor, constant: -24),
-                open.trailingAnchor.constraint(equalTo: (configure ?? delete).leadingAnchor, constant: -12),
+                open.trailingAnchor.constraint(equalTo: delete.leadingAnchor, constant: -12),
                 open.centerYAnchor.constraint(equalTo: row.centerYAnchor)
             ])
-        } else if let configure {
-            labels.trailingAnchor.constraint(lessThanOrEqualTo: configure.leadingAnchor, constant: -24).isActive = true
         } else {
             labels.trailingAnchor.constraint(lessThanOrEqualTo: delete.leadingAnchor, constant: -24).isActive = true
         }
@@ -3176,100 +3001,6 @@ final class EnvironmentManagerViewController: NSViewController {
         activateRule(bundleID: parts[2], environmentKey: parts[0], scenarioID: parts[1])
     }
 
-    @objc private func configureLaunchActions(_ sender: NSButton) {
-        let parts = (sender.identifier?.rawValue ?? "")
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map(String.init)
-        guard parts.count == 3,
-              let environment = store.storedEnvironments.first(where: { $0.key == parts[0] }),
-              let scenario = environment.scenarios[parts[1]],
-              let contentKind = launchContentKind(for: parts[2]),
-              let appName = scenario.rules[parts[2]]?.first?.appName else { return }
-
-        let existing = supportedLaunchActions(scenario.launchActions[parts[2]] ?? [], for: parts[2])
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 54))
-        text.isRichText = false
-        text.font = .systemFont(ofSize: 12)
-        text.string = existing.map(\.value).joined(separator: "\n")
-
-        let scroll = launchActionTextScrollView(text)
-        let fieldTitle: String
-        let informativeTextKey: String
-        switch contentKind {
-        case .browserURLs:
-            fieldTitle = L10n.text("URLs (one per line)")
-            informativeTextKey = "Configure startup URLs for %@."
-        case .obsidianFiles:
-            fieldTitle = L10n.text("Files (one per line)")
-            informativeTextKey = "Configure startup files for %@."
-        case .feishuLinks:
-            fieldTitle = L10n.text("Feishu AppLinks (one per line)")
-            informativeTextKey = "Configure Feishu links for %@."
-        }
-        let fieldLabel = NSTextField(labelWithString: fieldTitle)
-        fieldLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        fieldLabel.textColor = .secondaryLabelColor
-        fieldLabel.alignment = .left
-        let accessory = NSStackView(views: [fieldLabel, scroll])
-        accessory.orientation = .vertical
-        accessory.alignment = .width
-        accessory.spacing = 6
-        accessory.translatesAutoresizingMaskIntoConstraints = false
-
-        // NSAlert does not reliably preserve an NSStackView's frame as the
-        // accessory width. A fixed-size wrapper gives the fields a stable
-        // readable measure and lets the stack fill it edge to edge.
-        let accessoryContainer = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 78))
-        accessoryContainer.addSubview(accessory)
-        NSLayoutConstraint.activate([
-            accessory.leadingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor),
-            accessory.trailingAnchor.constraint(equalTo: accessoryContainer.trailingAnchor),
-            accessory.topAnchor.constraint(equalTo: accessoryContainer.topAnchor),
-            accessory.bottomAnchor.constraint(equalTo: accessoryContainer.bottomAnchor)
-        ])
-        scroll.heightAnchor.constraint(equalToConstant: 54).isActive = true
-
-        let alert = NSAlert()
-        alert.icon = displayHarborIcon()
-        alert.messageText = L10n.text("Configure launch content")
-        alert.informativeText = L10n.text(informativeTextKey, appName)
-        alert.accessoryView = accessoryContainer
-        alert.addButton(withTitle: L10n.text("Save"))
-        alert.addButton(withTitle: L10n.text("Clear"))
-        alert.addButton(withTitle: L10n.text("Cancel"))
-        presentAlert(alert) { [weak self] response in
-            guard let self else { return }
-            guard response == .alertFirstButtonReturn || response == .alertSecondButtonReturn else { return }
-            let actions: [LaunchAction]
-            if response == .alertSecondButtonReturn {
-                actions = []
-            } else {
-                let values = Self.nonEmptyLines(from: text.string)
-                switch contentKind {
-                case .browserURLs:
-                    if let invalidURL = values.first(where: { URL(string: $0)?.scheme == nil }) {
-                        self.showLaunchActionError(L10n.text("URL must include a scheme, for example https:// or obsidian://: %@", invalidURL))
-                        return
-                    }
-                case .feishuLinks:
-                    if let invalidLink = values.first(where: { !Self.isValidFeishuLink($0) }) {
-                        self.showLaunchActionError(L10n.text("Feishu links must use feishu://... or https://applink.feishu.cn/...: %@", invalidLink))
-                        return
-                    }
-                case .obsidianFiles:
-                    break
-                }
-                actions = values.map { LaunchAction(kind: contentKind.actionKind, value: $0) }
-            }
-            guard self.store.setLaunchActions(actions, for: parts[2], inEnvironment: parts[0], scenarioID: parts[1]) else {
-                self.showPersistenceError()
-                return
-            }
-            self.render()
-            self.onChange()
-        }
-    }
-
     @objc private func addExitApp(_ sender: NSButton) {
         let parts = (sender.identifier?.rawValue ?? "").split(separator: "\n").map(String.init)
         guard parts.count == 2,
@@ -3343,50 +3074,6 @@ final class EnvironmentManagerViewController: NSViewController {
         }
     }
 
-    private func launchActionTextScrollView(_ textView: NSTextView) -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.documentView = textView
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.borderType = .bezelBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        textView.minSize = NSSize(width: 0, height: 54)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        return scroll
-    }
-
-    private static func nonEmptyLines(from text: String) -> [String] {
-        text.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    private static func isValidFeishuLink(_ value: String) -> Bool {
-        guard let url = URL(string: value),
-              let scheme = url.scheme?.lowercased(),
-              let host = url.host?.lowercased() else { return false }
-        switch scheme {
-        case "feishu", "lark":
-            return host == "applink"
-        case "https":
-            return host == "applink.feishu.cn"
-        default:
-            return false
-        }
-    }
-
-    private func showLaunchActionError(_ message: String) {
-        let alert = NSAlert()
-        alert.icon = displayHarborIcon()
-        alert.messageText = L10n.text("Unable to save launch content")
-        alert.informativeText = message
-        alert.addButton(withTitle: L10n.text("OK"))
-        presentAlert(alert) { _ in }
-    }
-
     private func showExitAppError(_ message: String) {
         let alert = NSAlert()
         alert.icon = displayHarborIcon()
@@ -3401,24 +3088,11 @@ final class EnvironmentManagerViewController: NSViewController {
               let targetScenarioID = scenarioID ?? environment.activeScenarioID,
               let rules = environment.scenarios[targetScenarioID]?.rules[bundleID],
               !rules.isEmpty else { return }
-        let actions = supportedLaunchActions(
-            store.launchActions(for: bundleID, inEnvironment: environmentKey, scenarioID: targetScenarioID),
-            for: bundleID
-        )
-
         if let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == bundleID && !$0.isTerminated && $0.isFinishedLaunching
         }) {
             app.activate(options: [.activateAllWindows])
-            if actions.isEmpty {
-                _ = WindowProbe.restore(app: app, using: rules)
-            } else {
-                performLaunchActions(actions, in: app.bundleURL)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    app.activate(options: [.activateAllWindows])
-                    _ = WindowProbe.restore(app: app, using: rules)
-                }
-            }
+            _ = WindowProbe.restore(app: app, using: rules)
             refresh()
             return
         }
@@ -3427,15 +3101,10 @@ final class EnvironmentManagerViewController: NSViewController {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, _ in
-            guard !actions.isEmpty else { return }
+            guard let app else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                performLaunchActions(actions, in: app?.bundleURL ?? url)
-                app?.activate(options: [.activateAllWindows])
-                if let app {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        _ = WindowProbe.restore(app: app, using: rules)
-                    }
-                }
+                app.activate(options: [.activateAllWindows])
+                _ = WindowProbe.restore(app: app, using: rules)
             }
         }
     }

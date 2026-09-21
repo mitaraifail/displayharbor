@@ -15,7 +15,6 @@ DisplayHarbor is a native macOS menu bar utility that remembers where your app w
 - Automatically re-apply rules after displays connect, disconnect, or change arrangement.
 - Open and restore all currently unopened apps in the active workspace.
 - Configure apps that should receive a normal quit request when entering each workspace.
-- Configure supported App integrations, such as browser URLs, Feishu AppLinks, and Obsidian files.
 - Inspect and maintain display setups and app rules in the management window.
 - Follow the macOS preferred language (English and Simplified Chinese are included).
 
@@ -88,16 +87,6 @@ open dist/DisplayHarbor.app
 5. Open **Manage Setups & App Rules** to inspect rules and workspaces.
 6. Use **Apply Current Workspace** to open unopened apps and restore their saved windows.
 7. Add work apps to **Exit Apps when entering** below the selected workspace's saved App rules.
-
-### App-specific launch content
-
-Launch content is intentionally App-specific. In **Manage Setups & App Rules**, supported App rules show a launch-content icon:
-
-- **Chrome and compatible browsers** can be configured with URLs (`https://...`).
-- **Feishu** can be configured with official AppLinks (`feishu://...` or `https://applink.feishu.cn/...`) for chats, documents, calendar pages, and other supported destinations.
-- **Obsidian** can be configured with local files, such as `/Users/me/Notes/Today.md`.
-
-Other Apps do not show this configuration until a dedicated integration is added. Launch content runs when you explicitly choose **Open App**, **Open all**, or **Apply Current Workspace** for an unopened App; ordinary display-change restoration does not reopen content on every refresh. DisplayHarbor uses macOS Launch Services and does not execute shell commands or AppleScript.
 
 Exit rules request a normal quit from configured apps when switching into the workspace; they never force-terminate a process. If an app has unsaved content, macOS continues through that app's own save flow. An app cannot have both a saved layout rule and an exit rule in the same workspace.
 
