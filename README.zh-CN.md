@@ -59,9 +59,9 @@ ZIP 备用方式：
 
 ## 更新软件
 
-DisplayHarbor 会定期检查 GitHub Releases。当发现新版本时，菜单栏面板会显示“新版本”操作，点击后打开对应的 Release 页面。当前免费版本不会自动替换 App。
+DisplayHarbor 会通过 Sparkle 定期检查经过签名的 appcast。当发现新版本时，Sparkle 会验证更新包并在 App 内显示更新流程，可以自动下载、安装并重新启动 DisplayHarbor。
 
-更新时，从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新的 DMG 并校验 checksum，退出 DisplayHarbor，然后将新的 App 拖到 `/Applications`。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。未来可以考虑接入带签名的 Sparkle 2，提供更顺滑的应用内更新流程。
+如果 Sparkle 不可用，或者你希望手动安装更新，仍然可以从 [GitHub Releases 页面](https://github.com/mitaraifail/displayharbor/releases/latest) 下载新的 DMG 并校验 checksum，退出 DisplayHarbor，然后将新的 App 拖到 `/Applications`。规则保存在 `~/Library/Application Support/DisplayHarbor/environments.json`，替换 App 不会删除这些数据。
 
 ## 从源码运行
 
@@ -109,6 +109,7 @@ git push origin v0.1.4
 
 - `DisplayHarbor-<version>-macos-arm64.zip`
 - `DisplayHarbor-<version>-macos-arm64.zip.sha256`
+- `appcast.xml`（Sparkle 自动更新 feed）
 - `DisplayHarbor-<version>-macos-arm64.dmg`（推荐安装包）
 - `DisplayHarbor-<version>-macos-arm64.dmg.sha256`
 
@@ -121,8 +122,9 @@ Release 工作流需要在仓库的 **Settings → Secrets and variables → Act
 - `DISPLAYHARBOR_NOTARY_APPLE_ID`：加入 Apple Developer Program 的 Apple ID 邮箱。
 - `DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD`：为这个 Apple ID 生成的 App 专用密码，不是 Apple ID 普通密码。
 - `DISPLAYHARBOR_NOTARY_TEAM_ID`：Apple Developer Team ID，例如 `6ABLTPWC78`。
+- `DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY`：从 Sparkle 的 `generate_keys` 工具导出的 EdDSA 私钥，只保存到 GitHub Secrets。
 
-私钥、`.p12` 密码和 API Key 不要提交到 Git。工作流会在 GitHub runner 的临时钥匙串中导入证书，完成签名、公证、票据装订和 checksum 生成。
+私钥、`.p12` 密码、API Key 和 EdDSA 私钥不要提交到 Git。工作流会在 GitHub runner 的临时钥匙串中导入证书，完成签名、公证、票据装订、checksum 和 Sparkle appcast 生成。
 
 ## 显示器环境与情景
 

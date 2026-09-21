@@ -59,9 +59,9 @@ If Finder shows a generic placeholder icon, relaunch Finder after installation. 
 
 ## Updating
 
-DisplayHarbor checks the GitHub Releases API periodically. When a newer version is available, the menu bar panel shows a **New version** action that opens the matching release page. This free release intentionally does not replace the app automatically.
+DisplayHarbor uses Sparkle to check the signed appcast periodically. When a newer version is available, Sparkle verifies the update archive and presents an in-app update flow that can download, install, and relaunch DisplayHarbor.
 
-To update, download the newer DMG from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), verify its checksum, quit DisplayHarbor, and drag the new app to `/Applications`. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced. A signed Sparkle 2 updater can be considered later for a smoother in-app flow.
+If Sparkle is unavailable or you prefer a manual install, download the newer DMG from the [GitHub Releases page](https://github.com/mitaraifail/displayharbor/releases/latest), verify its checksum, quit DisplayHarbor, and drag the new app to `/Applications`. Your rules stay in `~/Library/Application Support/DisplayHarbor/environments.json` and are not removed when the app is replaced.
 
 ## Run from source
 
@@ -109,6 +109,7 @@ The workflow builds, verifies, and uploads:
 
 - `DisplayHarbor-<version>-macos-arm64.zip`
 - `DisplayHarbor-<version>-macos-arm64.zip.sha256`
+- `appcast.xml` (Sparkle automatic update feed)
 - `DisplayHarbor-<version>-macos-arm64.dmg` (recommended installer)
 - `DisplayHarbor-<version>-macos-arm64.dmg.sha256`
 
@@ -121,8 +122,9 @@ The Release workflow requires these repository Secrets under **Settings → Secr
 - `DISPLAYHARBOR_NOTARY_APPLE_ID`: Apple ID email for the Apple Developer Program membership.
 - `DISPLAYHARBOR_NOTARY_APP_SPECIFIC_PASSWORD`: app-specific password generated for that Apple ID, not the normal Apple ID password.
 - `DISPLAYHARBOR_NOTARY_TEAM_ID`: Apple Developer Team ID, for example `6ABLTPWC78`.
+- `DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY`: private EdDSA key exported from Sparkle's `generate_keys` tool. Keep this only in GitHub Secrets.
 
-Do not commit the private key, `.p12` password, or API key. The workflow imports the certificate into a temporary keychain on the GitHub runner, then signs, notarizes, staples, and checksums the release artifacts.
+Do not commit the private key, `.p12` password, API key, or EdDSA key. The workflow imports the certificate into a temporary keychain on the GitHub runner, then signs, notarizes, staples, checksums, and publishes the Sparkle appcast.
 
 ## Display setups and workspaces
 

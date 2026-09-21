@@ -79,6 +79,22 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent dist/DisplayHarbor.app "$archive"
           (cd "$(dirname "$archive")" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
 
+      - name: Generate Sparkle appcast
+        env:
+          DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          updates_dir="$RUNNER_TEMP/displayharbor-sparkle-updates"
+          sparkle_bin=".build/artifacts/sparkle/Sparkle/bin"
+          archive="dist/DisplayHarbor-${GITHUB_REF_NAME}-macos-arm64.zip"
+          mkdir -p "$updates_dir"
+          cp "$archive" "$updates_dir/"
+          test -x "$sparkle_bin/generate_appcast"
+          printf '%s' "$DISPLAYHARBOR_SPARKLE_EDDSA_PRIVATE_KEY" \
+            | "$sparkle_bin/generate_appcast" --ed-key-file - "$updates_dir"
+          test -f "$updates_dir/appcast.xml"
+          cp "$updates_dir/appcast.xml" dist/appcast.xml
+
       - name: Package DMG
         env:
           DISPLAYHARBOR_VERSION: ${{ github.ref_name }}
@@ -128,5 +144,6 @@ jobs:
           files: |
             dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip
             dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.zip.sha256
+            dist/appcast.xml
             dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.dmg
             dist/DisplayHarbor-${{ github.ref_name }}-macos-arm64.dmg.sha256

@@ -106,6 +106,3 @@
 "Switch" = "Switch";
 "The rules file was corrupted and backed up as %@" = "The rules file was corrupted and backed up as %@";
 "Check for updates" = "Check for updates";
-"Checking for updates" = "Checking for updates…";
-"New version %@" = "New version %@";
-"Up to date" = "Up to date";

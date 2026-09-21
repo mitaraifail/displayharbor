@@ -32,8 +32,23 @@ cp "$project_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
 app_version="${DISPLAYHARBOR_VERSION:-0.1.1}"
 app_version="${app_version#v}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$app_dir/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${app_version//./}" "$app_dir/Contents/Info.plist"
 cp "$project_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
 cp -R "$project_dir/Resources/"*.lproj "$app_dir/Contents/Resources/"
+
+sparkle_framework="$project_dir/.build/artifacts/sparkle/Sparkle/Sparkle.framework"
+if [[ ! -d "$sparkle_framework" ]]; then
+    sparkle_framework="$(find "$project_dir/.build" -type d -path '*/Sparkle.framework' -print -quit 2>/dev/null)"
+fi
+if [[ -z "$sparkle_framework" || ! -d "$sparkle_framework" ]]; then
+    echo "Error: Sparkle.framework was not found. Run swift package resolve first." >&2
+    exit 1
+fi
+mkdir -p "$app_dir/Contents/Frameworks"
+ditto "$sparkle_framework" "$app_dir/Contents/Frameworks/Sparkle.framework"
+if ! otool -l "$app_binary" | grep -q '@loader_path/../Frameworks'; then
+    install_name_tool -add_rpath '@loader_path/../Frameworks' "$app_binary"
+fi
 
 signing_identity="${DISPLAYHARBOR_SIGNING_IDENTITY:-}"
 if [[ -z "$signing_identity" ]]; then
@@ -46,6 +61,6 @@ if [[ -z "$signing_identity" ]]; then
     exit 1
 fi
 
-codesign --force --timestamp --options runtime --sign "$signing_identity" "$app_dir" >/dev/null
+codesign --force --deep --timestamp --options runtime --sign "$signing_identity" "$app_dir" >/dev/null
 echo "Signed with $signing_identity"
 echo "Built $app_dir"
