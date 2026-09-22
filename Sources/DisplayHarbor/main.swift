@@ -1480,6 +1480,7 @@ final class PopoverViewController: NSViewController {
     private var snapshots: [WindowSnapshot]
     private let store: RuleStore
     private let hasTargetApplication: Bool
+    private let targetApplicationName: String?
     private let onChange: () -> Void
     private let onOpenManager: () -> Void
     private let onOpenSettings: () -> Void
@@ -1504,6 +1505,7 @@ final class PopoverViewController: NSViewController {
         snapshots: [WindowSnapshot],
         store: RuleStore,
         hasTargetApplication: Bool,
+        targetApplicationName: String?,
         onChange: @escaping () -> Void,
         onOpenManager: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
@@ -1513,6 +1515,7 @@ final class PopoverViewController: NSViewController {
         self.snapshots = snapshots
         self.store = store
         self.hasTargetApplication = hasTargetApplication
+        self.targetApplicationName = targetApplicationName
         self.onChange = onChange
         self.onOpenManager = onOpenManager
         self.onOpenSettings = onOpenSettings
@@ -1706,7 +1709,7 @@ final class PopoverViewController: NSViewController {
 
     private func detailsView() -> NSView {
         let container = NSView()
-        let appTitle = NSTextField(labelWithString: snapshot?.appName ?? L10n.text("Not available"))
+        let appTitle = NSTextField(labelWithString: snapshot?.appName ?? targetApplicationName ?? L10n.text("No app selected"))
         appTitle.font = .boldSystemFont(ofSize: 16)
         appTitle.textColor = .labelColor
         appTitle.setContentCompressionResistancePriority(.required, for: .vertical)
@@ -3511,6 +3514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshots: snapshots,
             store: store,
             hasTargetApplication: app != nil,
+            targetApplicationName: app?.localizedName,
             onChange: { [weak self] in
                 self?.refreshStatusItem()
             },
@@ -3680,7 +3684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let generation = generation ?? restoreGeneration
         guard attempt < 8 else {
             if preserveStatus {
-            setStatusItemState(.warning)
+                setStatusItemState(.warning)
             } else {
                 refreshStatusItem(warning: true)
             }
